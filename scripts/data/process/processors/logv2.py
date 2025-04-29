@@ -10,80 +10,76 @@ def process_log_file(file_path):
     """Process a single log file and extract data."""
     log_data = []
 
+    # New regex: optional second "- " before the "[" 
+    log_pattern = re.compile(
+        r'(?P<ip>[\d.:]+)\s-\s(?:-\s)?\['
+        r'(?P<timestamp>[^\]]+)\]\s"'
+        r'(?P<request>GET|POST)\s'
+        r'(?P<path>[^\s]+)\sHTTP/1\.1"\s'
+        r'(?P<status_code>\d+|-)\s'
+        r'(?P<size>\d+|-)\s'
+        r'"(?P<referrer>[^"]*)"\s'
+        r'"(?P<user_agent>[^"]*)"'
+    )
+
     with open(file_path, 'r', encoding='utf-8') as log_file:
         for line in log_file:
             try:
-                # Parse the JSON object
                 log_entry = json.loads(line)
                 message = log_entry.get("message", "")
 
-                # Updated regex to capture "size" (digits or '-') after status code:
-                match = re.search(
-                    r'(?P<ip>[\d.:]+)\s-\s-\s\['
-                    r'(?P<timestamp>[^\]]+)\]\s"'
-                    r'(?P<request>GET|POST)\s'
-                    r'(?P<path>[^\s]+)\sHTTP/1.1"\s'
-                    r'(?P<status_code>\d+)\s'
-                    r'(?P<size>\d+|-)\s'
-                    r'"(?P<referrer>[^"]*)"\s'
-                    r'"(?P<user_agent>[^"]*)"',
-                    message
-                )
-                if match:
-                    groups = match.groupdict()
-
-                    # Extract IP address
-                    ip_address = groups["ip"]
-                    # Strip off "::ffff:" if present
-                    if ip_address.startswith("::ffff:"):
-                        ip_address = ip_address[7:]
-
-                    # Parse timestamp (assumes format "2025-01-28 12:34:56.789")
-                    timestamp_str = groups["timestamp"]
-                    timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S.%f")
-                    access_date = timestamp.strftime("%Y-%m-%d")
-
-                    # Extract module name (if any)
-                    path = groups["path"]
-                    module_name = "none"
-                    if "/modules/" in path:
-                        module_name = path.split("/modules/")[1].split("/")[0]
-
-                    # Optionally skip if path contains something specific
-                    if "http://oc4d.cdn/categories" in path:
-                        continue
-
-                    # Parse user agent
-                    user_agent = parse(groups["user_agent"])
-                    device_type = user_agent.os.family if user_agent.os.family else "unknown"
-                    browser_name = user_agent.browser.family if user_agent.browser.family else "unknown"
-
-                    # Convert size (bytes) to GB with 10 decimals
-                    raw_size = groups["size"]
-                    if raw_size.isdigit():
-                        size_in_bytes = int(raw_size)
-                    else:
-                        size_in_bytes = 0
-                    response_size_gb = f"{(size_in_bytes / 1073741824):.10f}"
-
-                    # Append the data to the log_data list
-                    log_data.append([
-                        ip_address,
-                        access_date,
-                        module_name,
-                        groups["status_code"],
-                        response_size_gb,
-                        device_type,
-                        browser_name,
-                    ])
-                else:
-                    # If line doesn't match, we skip but optionally print a warning
+                match = log_pattern.search(message)
+                if not match:
                     print(f"Skipping line (unexpected format): {message}")
+                    continue
+
+                g = match.groupdict()
+
+                # Normalize IP
+                ip = g["ip"]
+                if ip.startswith("::ffff:"):
+                    ip = ip[7:]
+
+                # Parse timestamp (handles both ISO and space formats)
+                ts = g["timestamp"]
+                if ts.endswith("Z") and "T" in ts:
+                    # e.g. 2024-12-17T23:59:40.761Z
+                    timestamp = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%fZ")
+                else:
+                    # e.g. 2025-01-28 12:34:56.789
+                    timestamp = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S.%f")
+                access_date = timestamp.strftime("%Y-%m-%d")
+
+                # Module name
+                path = g["path"]
+                module = "none"
+                if "/modules/" in path:
+                    module = path.split("/modules/")[1].split("/")[0]
+
+                # User agent
+                ua = parse(g["user_agent"])
+                device = ua.os.family or "unknown"
+                browser = ua.browser.family or "unknown"
+
+                # Size → GB
+                raw = g["size"]
+                size_bytes = int(raw) if raw.isdigit() else 0
+                size_gb = f"{size_bytes/1073741824:.10f}"
+
+                log_data.append([
+                    ip,
+                    access_date,
+                    module,
+                    g["status_code"],
+                    size_gb,
+                    device,
+                    browser,
+                ])
+
             except Exception as e:
                 print(f"Error processing line: {line.strip()}, Error: {e}")
 
     return log_data
-
 
 def save_processed_log_file(folder_path, file_path, log_data):
     """Save the processed log data to a CSV file."""
