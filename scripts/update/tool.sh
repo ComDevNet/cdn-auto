@@ -45,6 +45,12 @@ sudo chmod +x scripts/data/process/*.sh
 sudo chmod +x scripts/data/upload/*.sh
 sudo chmod +x scripts/troubleshoot/*.sh
 
+# install python3 and pip3
+pip3 install -r requirements.txt --break-system-packages
+pip install -r requirements.txt --break-system-packages
+pip3 install user-agents --break-system-packages
+pip3 install tqdm --break-system-packages
+
 # Return to the original directory
 cd "$current_directory"
 
