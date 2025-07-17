@@ -4,44 +4,61 @@ import sys
 import os
 import csv
 from datetime import datetime
-from tqdm import tqdm
 
-def read_csv_without_null(file_path):
-    with open(file_path, 'r', newline='', encoding='utf-8') as f:
-        reader = csv.reader((line.replace('\0', '') for line in f))
-        header = next(reader)
-        lines = [row for row in tqdm(reader, desc="Reading CSV", unit=" lines")]
-    return header, lines
+def process_csv(folder, location, month, processed_file_name):
+    input_path = os.path.join(folder, processed_file_name)
+    temp_output_path = os.path.join(folder, "temp_filtered.csv")
+    header = None
+    latest_year = None
 
-# Get folder, location, month, and processed file name from command line arguments
-folder, location, month, processed_file_name = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+    try:
+        with open(input_path, 'r', newline='', encoding='utf-8') as infile, \
+             open(temp_output_path, 'w', newline='', encoding='utf-8') as outfile:
 
-# Load the processed CSV file using the csv module
-csv_file_path = os.path.join(folder, 'summary_copy.csv')
-try:
-    header, lines = read_csv_without_null(csv_file_path)
-except Exception as e:
-    sys.exit(f"Error reading CSV file: {e}")
+            reader = csv.reader((line.replace('\0', '') for line in infile))
+            writer = csv.writer(outfile)
 
-# Extract dates and convert to datetime objects
-try:
-    dates = [datetime.strptime(line[1], '%Y-%m-%d') for line in lines]
-except ValueError as e:
-    sys.exit(f"Error converting dates: {e}")
+            header = next(reader)
+            writer.writerow(header)
 
-# Filter rows based on the selected month
-filtered_lines = [line for line in tqdm(lines, desc="Filtering Rows", unit=" lines") if datetime.strptime(line[1], '%Y-%m-%d').month == month]
+            for row in reader:
+                try:
+                    date_obj = datetime.strptime(row[1], '%Y-%m-%d')
+                    if date_obj.month == month:
+                        writer.writerow(row)
+                        if latest_year is None or date_obj.year > latest_year:
+                            latest_year = date_obj.year
+                except Exception:
+                    continue  # Skip invalid rows
 
-# Choose the latest year if there are multiple years
-year = max(datetime.strptime(line[1], '%Y-%m-%d').year for line in filtered_lines)
+    except Exception as e:
+        sys.exit(f"Error processing CSV: {e}")
 
-# Save the processed CSV file with the chosen year
-new_filename = f"{location}_{month:02d}_{year}_access_logs.csv"
-output_file_path = os.path.join(folder, new_filename)
-with open(output_file_path, 'w', newline='', encoding='utf-8') as f:
-    writer = csv.writer(f)
-    writer.writerow(header)
-    writer.writerows(filtered_lines)
+    if latest_year is None:
+        print("No valid rows matched.")
+        sys.exit(1)
 
-# Print the chosen year (for Bash script to capture)
-print(year)
+    # Final rename
+    final_name = f"{location}_{month:02d}_{latest_year}_access_logs.csv"
+    final_path = os.path.join(folder, final_name)
+    os.rename(temp_output_path, final_path)
+
+    print(latest_year)
+
+if __name__ == "__main__":
+    if len(sys.argv) != 5:
+        print("Usage: python process_csv.py <folder> <location> <month> <processed_file_name>")
+        sys.exit(1)
+
+    folder = sys.argv[1]
+    location = sys.argv[2]
+    try:
+        month = int(sys.argv[3])
+        if not 1 <= month <= 12:
+            raise ValueError
+    except ValueError:
+        print("Error: Month must be an integer between 1 and 12.")
+        sys.exit(1)
+
+    processed_file_name = sys.argv[4]
+    process_csv(folder, location, month, processed_file_name)

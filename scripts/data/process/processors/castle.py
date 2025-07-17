@@ -2,216 +2,187 @@ import os
 import csv
 import json
 import re
+import sys
 from urllib.parse import unquote
 from user_agents import parse
-from io import StringIO
 from datetime import datetime
-import sys
+from typing import Iterator
 
-def process_log_file(file_path):
-    """
-    Process a log file of JSON lines, each with a "message"
-    that looks like an Apache-like access log.
+# --- Constants ---
+LOG_MESSAGE_PATTERN = re.compile(
+    r'^(\S+)\s-'                # 1. IP Address
+    r'\s\[(.*?)\]\s'            # 2. Timestamp
+    r'"(.*?)"\s'                # 3. Request
+    r'(\d{3})\s'                # 4. Status Code
+    r'(\S+)\s'                  # 5. Response Size
+    r'"(.*?)"\s'                # 6. Referrer (unused)
+    r'"(.*?)"$'                 # 7. User Agent
+)
 
-    Key points:
-      - Strip off ::ffff: if present in IP.
-      - /modules/<folder>/ => module name = <folder>, location from final file name.
-      - /interactive-map/<digits>-<anything> => module name = "interactive-map", location viewed is that segment.
-        If it doesn't match the digits-dash pattern, location remains "none".
-      - If location is "card", change it to "none".
+REQUEST_PATH_PATTERN = re.compile(r'^[A-Z]+\s+(.*?)\s+HTTP/\d\.\d$')
+MODULES_PATTERN = re.compile(r'/modules/([^/]+)/')
+MODULES_LOCATION_PATTERN = re.compile(r'/modules/[^/]+/([^/]+)\.\w+$')
+INTERACTIVE_MAP_PATTERN = re.compile(r'/interactive-map/(\d+-[^/]+)')
+
+GIGABYTE = 1024 ** 3
+
+
+def process_log_file(file_path: str, error_log_path: str = None) -> Iterator[list]:
     """
-    log_data = []
+    Processes a log file line-by-line and yields structured data rows.
+    Invalid lines can optionally be written to an error log.
+    """
+    error_log = open(error_log_path, 'a', encoding='utf-8') if error_log_path else None
 
     with open(file_path, 'r', encoding='utf-8') as log_file:
-        for line in log_file:
+        for line_number, line in enumerate(log_file, start=1):
             line = line.strip()
             if not line:
                 continue
 
-            # 1) Attempt to parse JSON
             try:
                 log_entry = json.loads(line)
                 message = log_entry.get("message", "")
             except json.JSONDecodeError:
-                continue  # skip lines not valid JSON
-
-            # 2) Regex for combined-like log in the message
-            # e.g. ::ffff:192.168.4.230 - [2025-01-28T12:35:52.164Z] "GET /interactive-map/19-door-of-no-return HTTP/1.1" 200 - "ref" "UA"
-            pattern = (
-                r'^(\S+)\s-'            # IP
-                r'\s\[(.*?)\]\s'        # [timestamp]
-                r'"(.+?)"\s'            # "GET /path HTTP/1.1"
-                r'(\d+)\s'              # status code
-                r'(\S+)\s'              # size (or '-')
-                r'"(.*?)"\s'            # referrer
-                r'"(.*?)"$'             # user agent
-            )
-            match = re.match(pattern, message)
-            if not match:
+                if error_log:
+                    error_log.write(f"[JSON Error] Line {line_number}: {line}\n")
                 continue
 
-            ip_address, timestamp_str, request, status_code, response_size_bytes, _, user_agent_string = match.groups()
+            match = LOG_MESSAGE_PATTERN.match(message)
+            if not match:
+                if error_log:
+                    error_log.write(f"[Regex Mismatch] Line {line_number}: {line}\n")
+                continue
 
-            # 3) Strip off "::ffff:" prefix if present (IPv4-mapped IPv6)
+            ip_address, timestamp_str, request, status_code, size_bytes, _, ua_string = match.groups()
+
             if ip_address.startswith("::ffff:"):
                 ip_address = ip_address[7:]
 
-            # 4) Parse ISO-8601 timestamp (e.g. 2025-01-28T12:35:52.164Z)
             try:
                 timestamp = datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S.%fZ")
             except ValueError:
+                if error_log:
+                    error_log.write(f"[Timestamp Error] Line {line_number}: {timestamp_str}\n")
                 continue
 
-            access_date = timestamp.strftime("%Y-%m-%d")
-            access_time = timestamp.strftime("%H:%M:%S")
-
-            # 5) Extract the path from the request, e.g. GET /path HTTP/1.1
-            path_match = re.match(r'^[A-Z]+\s+(.*?)\s+HTTP/\d\.\d$', request)
-            path = path_match.group(1) if path_match else request
-
-            # 6) URL-decode the path
+            path_match = REQUEST_PATH_PATTERN.match(request)
+            path = path_match.group(1) if path_match else ''
             cleaned_path = unquote(path)
 
-            # Default fields
             module_name = 'none'
             location_viewed = 'none'
 
-            # 7) Check for /modules/<folder>/...
-            modules_match = re.search(r'/modules/([^/]+)/', cleaned_path)
-            if modules_match:
+            if (modules_match := MODULES_PATTERN.search(cleaned_path)):
                 module_name = modules_match.group(1)
-                # Extract the final file part, e.g. card.webp → card
-                location_match = re.search(r'/modules/[^/]+/([^/]+)\.\w+$', cleaned_path)
-                if location_match:
+                if (location_match := MODULES_LOCATION_PATTERN.search(cleaned_path)):
                     location_viewed = location_match.group(1)
-                    # "index" → "Home Page"
                     if location_viewed.lower() == 'index':
                         location_viewed = 'Home Page'
+            elif (interactive_match := INTERACTIVE_MAP_PATTERN.search(cleaned_path)):
+                module_name = 'interactive-map'
+                location_viewed = interactive_match.group(1)
 
-            else:
-                # 8) Check for /interactive-map/<digits>-<anything>
-                #    e.g. /interactive-map/19-door-of-no-return
-                #    If not matching digits-dash, location remains "none".
-                interactive_match = re.search(r'/interactive-map/(\d+-[^/]+)', cleaned_path)
-                if interactive_match:
-                    module_name = 'interactive-map'
-                    location_viewed = interactive_match.group(1)
-
-            # 9) If location is 'card', show none
             if location_viewed.lower() == 'card':
                 location_viewed = 'none'
 
-            # 10) Parse user agent
-            user_agent = parse(user_agent_string)
-            os_family = user_agent.os.family.lower() if user_agent.os.family else 'unknown'
-            browser_name = user_agent.browser.family if user_agent.browser.family else 'unknown'
+            user_agent = parse(ua_string or "")
+            os_family = user_agent.os.family or 'Unknown'
+            browser_name = user_agent.browser.family or 'Unknown'
 
-            # 11) Convert response size to GB
-            if response_size_bytes.isdigit():
-                response_size = int(response_size_bytes)
-            else:
-                response_size = 0
-            response_size_gb = format(response_size / 1073741824, ".5f")
+            response_size_gb = (int(size_bytes) / GIGABYTE) if size_bytes.isdigit() else 0.0
 
-            # 12) Append row
-            log_data.append([
+            yield [
                 ip_address,
-                access_date,
-                access_time,
+                timestamp.strftime("%Y-%m-%d"),
+                timestamp.strftime("%H:%M:%S"),
                 module_name,
                 location_viewed,
                 status_code,
-                response_size_gb,
-                os_family,
+                f"{response_size_gb:.5f}",
+                os_family.lower(),
                 browser_name
-            ])
+            ]
 
-    return log_data
+    if error_log:
+        error_log.close()
 
 
-def save_processed_log_file(selected_folder, file_path, log_data):
+def main():
     """
-    Saves processed data to a CSV named after the log file, inside
-    00_DATA/00_PROCESSED/<selected_folder>.
+    Main function to process log files from a specified folder.
     """
+    if len(sys.argv) < 2:
+        print("Error: Please provide the source folder name as an argument.")
+        print(f"Usage: python {sys.argv[0]} <folder_name>")
+        sys.exit(1)
+
+    selected_folder = sys.argv[1]
+    source_folder = os.path.join("00_DATA", selected_folder)
     processed_folder = os.path.join("00_DATA", "00_PROCESSED", selected_folder)
+    error_log_path = os.path.join(processed_folder, "error_log.txt")
+
+    if not os.path.exists(source_folder):
+        print(f"Error: Source folder '{source_folder}' not found.")
+        sys.exit(1)
+
     os.makedirs(processed_folder, exist_ok=True)
 
-    output_csv = StringIO()
-    writer = csv.writer(output_csv)
-    writer.writerow([
-        'IP Address',
-        'Access Date',
-        'Access Time',
-        'Module Viewed',
-        'Location Viewed',
-        'Status Code',
-        'Data Saved (GB)',
-        'Device Used',
-        'Browser Used'
-    ])
-    writer.writerows(log_data)
+    log_files = [
+        os.path.join(root, file)
+        for root, _, files in os.walk(source_folder)
+        for file in files if file.endswith(".log")
+    ]
 
-    output_csv.seek(0)
-    output_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}.csv"
-    output_path = os.path.join(processed_folder, output_filename)
+    total_files = len(log_files)
+    if total_files == 0:
+        print("No .log files found to process.")
+        return
 
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write(output_csv.getvalue())
+    print(f"Found {total_files} log file(s). Starting processing...")
 
+    master_summary_path = os.path.join(processed_folder, "summary.csv")
+    csv_header = [
+        'IP Address', 'Access Date', 'Access Time', 'Module Viewed',
+        'Location Viewed', 'Status Code', 'Data Saved (GB)',
+        'Device Used', 'Browser Used'
+    ]
 
-def create_master_csv(selected_folder, all_log_data):
-    """
-    Combines all processed log data into a single master CSV (summary.csv).
-    """
-    master_path = os.path.join("00_DATA", "00_PROCESSED", selected_folder, "summary.csv")
+    total_rows_written = 0
 
-    with open(master_path, 'w', encoding='utf-8', newline='') as master_csv:
-        writer = csv.writer(master_csv)
-        writer.writerow([
-            'IP Address',
-            'Access Date',
-            'Access Time',
-            'Module Viewed',
-            'Location Viewed',
-            'Status Code',
-            'Data Saved (GB)',
-            'Device Used',
-            'Browser Used'
-        ])
-        for data_chunk in all_log_data:
-            writer.writerows(data_chunk)
+    with open(master_summary_path, 'w', encoding='utf-8', newline='') as master_file:
+        master_writer = csv.writer(master_file)
+        master_writer.writerow(csv_header)
+
+        processed_files = 0
+        for file_path in log_files:
+            base_filename = os.path.splitext(os.path.basename(file_path))[0]
+            output_path = os.path.join(processed_folder, f"{base_filename}.csv")
+
+            with open(output_path, 'w', encoding='utf-8', newline='') as individual_file:
+                individual_writer = csv.writer(individual_file)
+                individual_writer.writerow(csv_header)
+
+                row_count = 0
+                for row in process_log_file(file_path, error_log_path=error_log_path):
+                    individual_writer.writerow(row)
+                    master_writer.writerow(row)
+                    row_count += 1
+                total_rows_written += row_count
+
+            processed_files += 1
+            progress = int((processed_files / total_files) * 100)
+            bar_length = 50
+            filled_length = int(bar_length * progress // 100)
+            bar = '=' * filled_length + '-' * (bar_length - filled_length)
+            print(f"\rProcessing: {progress}% |{bar}|", end='')
+
+    print("\n\nProcessing completed successfully.")
+    print(f"Processed {total_files} files, {total_rows_written} total rows.")
+    print(f"All processed data saved in: {processed_folder}")
+    print(f"Master summary created at: {master_summary_path}")
+    print(f"Errors (if any) logged to: {error_log_path}")
 
 
 if __name__ == '__main__':
-    selected_folder = sys.argv[1]
-    source_folder = os.path.join("00_DATA", selected_folder)
-    
-    if not os.path.exists(source_folder):
-        print(f"Error: Source folder {source_folder} not found")
-        sys.exit(1)
-
-    all_log_data = []
-    total_files = sum(len(files) for _, _, files in os.walk(source_folder))
-    processed_files = 0
-
-    for root, _, files in os.walk(source_folder):
-        for file in files:
-            # Adjust the extension if your logs are not .log
-            if file.endswith(".log"):
-                file_path = os.path.join(root, file)
-                log_data = process_log_file(file_path)
-                save_processed_log_file(selected_folder, file_path, log_data)
-                all_log_data.append(log_data)
-
-                processed_files += 1
-                progress = int((processed_files / total_files) * 100)
-                print(
-                    f"\rProcessing: {progress}% "
-                    f"[{'#' * (progress // 2)}{' ' * (50 - progress // 2)}]",
-                    end=''
-                )
-
-    # Create a combined master summary
-    create_master_csv(selected_folder, all_log_data)
-    print("\nProcessing completed. Master summary created.")
+    main()
