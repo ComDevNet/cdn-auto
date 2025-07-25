@@ -27,12 +27,12 @@ DARK_GRAY='\033[1;30m'
 # Display menu options
 echo -e "1. Run Monitor                       ${DARK_GRAY}-| Run the script which monitors and updates IP addresses${NC}"
 echo -e "2. Display IP Addresses              ${DARK_GRAY}-| Show the current IP addresses${NC}"
-echo -e "${GREEN}3. Go Back                     ${DARK_GRAY}-| Go back to the main menu${NC}"
-echo -e "${RED}4. Exit                        ${DARK_GRAY}-| Exit the program${NC}"
+echo -e "${GREEN}3. Go Back                           ${DARK_GRAY}-| Go back to the main menu${NC}"
+echo -e "${RED}4. Exit                              ${DARK_GRAY}-| Exit the program${NC}"
 
 echo -e "${NC}"
 # Prompt the user for input
-read -p "Choose an option (1-8): " choice
+read -p "Choose an option (1-4): " choice
 
 # Check the user's choice and execute the corresponding script
 case $choice in
