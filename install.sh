@@ -64,6 +64,7 @@ sudo chmod +x *.sh
 sudo chmod +x scripts/vpn/*.sh
 sudo chmod +x scripts/update/*.sh
 sudo chmod +x scripts/system/*.sh
+sudo chmod +x scripts/system/networking/*.sh
 sudo chmod +x scripts/data/*.sh
 sudo chmod +x scripts/data/all/v1/*.sh
 sudo chmod +x scripts/data/all/v1/process/*.sh
