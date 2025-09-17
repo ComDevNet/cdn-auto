@@ -1,4 +1,5 @@
 #!/bin/bash
+
 # Clear the screen
 clear
 echo -e "\n\n"
@@ -33,16 +34,24 @@ read -r -p "Choose an option (1-5): " choice
 # Execute corresponding action based on user choice
 case $choice in
     1)
-        ./scripts/data/automation/install.sh
+        # Added sudo here to ensure the installer has root privileges
+        sudo ./scripts/data/automation/install.sh
+        # Pause to allow user to read the installer output before returning to menu
+        read -r -p "Installation script finished. Press Enter to return to the menu..."
+        exec ./scripts/data/automation/main.sh
         ;;
     2)
         ./scripts/data/automation/status.sh
         ;;
     3)
-        ./scripts/data/automation/configure.sh
+        # Added sudo to ensure the configure script has root privileges
+        sudo ./scripts/data/automation/configure.sh
+        # Pause to allow user to read the configure output before returning to menu
+        read -r -p "Configuration script finished. Press Enter to return to the menu..."
+        exec ./scripts/data/automation/main.sh
         ;;
     4)
-        ./scripts/data/main.sh
+        exec ./scripts/data/main.sh
         ;;
     5)
         ./exit.sh
