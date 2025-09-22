@@ -186,10 +186,14 @@ fi
 echo
 hr
 echo "Done."
-# Prompt the user to press Enter before returning to the main menu
-echo ""
-echo "Press Enter to return to the main menu..."
-read -p ""
 
-# Return to the main menu
-exec ./scripts/data/automation/main.sh
+# Wait for Enter only if we're attached to a terminal (no-op in non-interactive runs)
+if [ -t 0 ]; then
+  printf "\nPress Enter to return to the main menu..."
+  IFS= read -r _   # POSIX-safe read (no -p)
+else
+  # optional: brief pause so output is readable when not interactive
+  sleep 1
+fi
+
+exit 0
