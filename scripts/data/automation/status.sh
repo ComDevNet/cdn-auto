@@ -186,4 +186,10 @@ fi
 echo
 hr
 echo "Done."
+# Prompt the user to press Enter before returning to the main menu
+echo ""
+echo "Press Enter to return to the main menu..."
+read -p ""
+
+# Return to the main menu
 exec ./scripts/data/automation/main.sh
