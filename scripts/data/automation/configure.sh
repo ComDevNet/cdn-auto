@@ -1,5 +1,5 @@
 #!/bin/bash
-# cdn-auto configure (defaults-first, fixed subfolder display)
+# cdn-auto configure (defaults-first + bucket-region autodetect)
 set -euo pipefail
 
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
@@ -71,6 +71,22 @@ aws_su() {
   fi
 }
 aws_capture() { aws_su "$@" 2>/dev/null; }
+
+# --- Region autodetect (no global config changes) ---
+bucket_region() {
+  # 1) Try S3 API (region-agnostic; CLI still wants a region flag, use us-east-1)
+  local b="$1" reg=""
+  reg="$(aws_capture --region us-east-1 s3api get-bucket-location --bucket "$b" --query 'LocationConstraint' --output text 2>/dev/null || true)"
+  if [[ -z "$reg" || "$reg" == "None" ]]; then reg="us-east-1"; fi
+  if [[ "$reg" == "EU" ]]; then reg="eu-west-1"; fi
+  # 2) If still empty (unlikely), try curl header
+  if [[ -z "$reg" ]]; then
+    if have curl; then
+      reg="$(curl -sI "https://${b}.s3.amazonaws.com/" | tr -d '\r' | awk -F': ' 'BEGIN{IGNORECASE=1}/^x-amz-bucket-region:/{print $2;exit}')"
+    fi
+  fi
+  echo "$reg"
+}
 
 check_network() {
   getent hosts s3.amazonaws.com >/dev/null 2>&1 || return 1
@@ -174,28 +190,28 @@ pick_bucket() {
 }
 pick_bucket
 
-# FIXED subfolder discovery: split tab-separated 's3api ... --output text' into separate items
+# Subfolder discovery (using autodetected region)
 pick_subfolder() {
   local bucket_name="${S3_BUCKET#s3://}"; bucket_name="${bucket_name%%/*}"
+  local REG; REG="$(bucket_region "$bucket_name")"
   local opts=( "NONE" "<bucket root>" "CUSTOM" "Enter subfolder manually" )
-  local prefixes_text="" rc=0
 
-  prefixes_text="$(aws_capture s3api list-objects-v2 --bucket "$bucket_name" --delimiter '/' --query 'CommonPrefixes[].Prefix' --output text 2>&1)"; rc=$?
-  if (( rc == 0 )) && [[ -n "$prefixes_text" && "$prefixes_text" != "None" ]]; then
-    # Convert tabs to newlines, strip trailing '/', drop empties
+  # Try s3api with delimiter to get top-level prefixes
+  local out rc
+  out="$(aws_capture --region "$REG" s3api list-objects-v2 --bucket "$bucket_name" --delimiter '/' --query 'CommonPrefixes[].Prefix' --output text 2>&1)"; rc=$?
+  if (( rc == 0 )) && [[ -n "$out" && "$out" != "None" ]]; then
     while IFS= read -r p; do
-      p="${p%/}"
-      [[ -n "$p" ]] && opts+=( "$p" "$p" )
-    done < <(printf '%s' "$prefixes_text" | tr '\t' '\n' | sed '/^ *$/d')
+      p="${p%/}"; [[ -n "$p" ]] && opts+=( "$p" "$p" )
+    done < <(printf '%s' "$out" | tr '\t' '\n' | sed '/^ *$/d')
   else
-    # Fallback to 'aws s3 ls' PRE parsing
-    local lsout; lsout="$(aws_capture s3 ls "s3://$bucket_name/" 2>&1 || true)"
+    # Fallback to 'aws s3 ls'
+    out="$(aws_capture --region "$REG" s3 ls "s3://$bucket_name/" 2>&1 || true)"
     while IFS= read -r line; do
       if [[ "$line" == PRE* ]]; then
         p="$(echo "$line" | awk '{print $2}' | sed 's:/$::')"
         [[ -n "$p" ]] && opts+=( "$p" "$p" )
       fi
-    done <<< "$lsout"
+    done <<< "$out"
   fi
 
   local choice
@@ -213,6 +229,7 @@ pick_subfolder() {
 pick_subfolder
 S3_SUBFOLDER="$(sanitize_subfolder "$S3_SUBFOLDER")"
 
+# Schedule
 sched=$(menu_select "Choose schedule" 15 74 7 \
   hourly "Every hour" \
   daily  "Once per day" \
@@ -231,6 +248,7 @@ case "$sched" in
     ;;
 esac
 
+# Summary
 summary=$(cat <<EOF
 Service user   : $SERVICE_USER
 Server version : $SERVER_VERSION
@@ -245,6 +263,7 @@ EOF
 if have_whiptail; then whiptail --title "Confirm configuration" --msgbox "$summary" 19 74; else echo; echo "$summary"; echo; fi
 if ! confirm "Save configuration?"; then echo "Aborted."; exit 1; fi
 
+# Save
 umask 077
 tmp="${CONFIG_FILE}.tmp"
 cat > "$tmp" <<EOF
@@ -262,9 +281,12 @@ sudo chown "${SERVICE_USER}:${SERVICE_GROUP}" "$CONFIG_FILE"
 sudo chmod 600 "$CONFIG_FILE"
 say "💾 Saved: $CONFIG_FILE (owner: $SERVICE_USER)"
 
+# Live test using discovered region
 test_upload() {
   if ! have aws; then say "❌ AWS CLI not installed."; return 1; fi
-  local tsf tmpfile s3url key_path bucket_name key_key
+  local bucket_name="${S3_BUCKET#s3://}"; bucket_name="${bucket_name%%/*}"
+  local REG; REG="$(bucket_region "$bucket_name")"
+  local tsf tmpfile s3url key_path full
   tsf="$(date +%Y%m%d_%H%M%S)"
   tmpfile="$(mktemp /tmp/cdn_auto_cfgtest.XXXXXX)"
   cat > "$tmpfile" <<EOD
@@ -279,13 +301,14 @@ EOD
   s3url="${S3_BUCKET%/}"; [[ -n "$S3_SUBFOLDER" ]] && s3url="${s3url}/${S3_SUBFOLDER}"
   key_path="RACHEL/_config_test_${tsf}.txt"
   full="${s3url}/${key_path}"
-  bucket_name="${S3_BUCKET#s3://}"; bucket_name="${bucket_name%%/*}"
-  if ! aws_su s3 cp "$tmpfile" "$full" >/dev/null 2>&1; then
-    say "❌ Upload failed. Check AWS defaults for '$SERVICE_USER' (credentials/region)."
+
+  say "▶ Test upload (region=$REG) → $full"
+  if ! aws_su --region "$REG" s3 cp "$tmpfile" "$full" >/dev/null 2>&1; then
+    say "❌ Upload failed. Check credentials/permissions for user '$SERVICE_USER'."
     rm -f "$tmpfile"; return 1
   fi
   rm -f "$tmpfile"
-  aws_su s3api head-object --bucket "$bucket_name" --key "${S3_SUBFOLDER:+$S3_SUBFOLDER/}${key_path}" >/dev/null 2>&1 \
+  aws_su --region "$REG" s3api head-object --bucket "$bucket_name" --key "${S3_SUBFOLDER:+$S3_SUBFOLDER/}${key_path}" >/dev/null 2>&1 \
     && say "✅ Test upload verified." || say "⚠️ Upload succeeded; verification denied (policy may not allow GetObject)."
   return 0
 }

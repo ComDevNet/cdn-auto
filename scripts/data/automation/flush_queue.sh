@@ -1,5 +1,5 @@
 #!/bin/sh
-# Flush queue: fix AWS_PROFILE handling (unset when empty) + sudo-aware config load
+# Flush queue with per-bucket region autodetect; no global AWS config required
 set -eu
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -11,42 +11,27 @@ CONFIG_FILE="$PROJECT_ROOT/config/automation.conf"
 load_config() {
   src="$CONFIG_FILE"
   tmp=""
-  if [ -r "$src" ]; then
-    # shellcheck disable=SC1090
-    . "$src"
-    log "⚙️  Config loaded (direct): $src"
-    return 0
-  fi
+  if [ -r "$src" ]; then . "$src"; log "⚙️  Config loaded (direct): $src"; return 0; fi
   if command -v sudo >/dev/null 2>&1; then
     tmp="/tmp/cdn_auto_conf.$$"
-    if sudo -n cat "$src" > "$tmp" 2>/dev/null || sudo cat "$src" > "$tmp" 2>/dev/null; then
-      chmod 600 "$tmp"
-      . "$tmp"
-      rm -f "$tmp"
-      log "⚙️  Config loaded (sudo): $src"
-      return 0
-    fi
+    if sudo -n cat "$src" > "$tmp" 2>/dev/null || sudo cat "$src" > "$tmp" 2>/dev/null; then chmod 600 "$tmp"; . "$tmp"; rm -f "$tmp"; log "⚙️  Config loaded (sudo)"; return 0; fi
   fi
   log "❌ Cannot read config: $src"; exit 1
 }
 load_config
 
-# Normalize AWS env
-if [ -n "${AWS_PROFILE:-}" ]; then
-  export AWS_PROFILE
-else
-  unset AWS_PROFILE || true
-fi
-if [ -n "${AWS_REGION:-}" ]; then
-  export AWS_DEFAULT_REGION="$AWS_REGION"
-elif [ -n "${AWS_DEFAULT_REGION:-}" ]; then
-  export AWS_DEFAULT_REGION
-else
-  unset AWS_DEFAULT_REGION || true
-fi
+bucket_name() { bn="${S3_BUCKET#s3://}"; echo "${bn%%/*}"; }
 
-DATA_DIR="$PROJECT_ROOT/00_DATA"
-QUEUE_DIR="$DATA_DIR/00_UPLOAD_QUEUE"
+bucket_region() {
+  b="$(bucket_name)"; reg=""
+  reg="$(aws --region us-east-1 s3api get-bucket-location --bucket "$b" --query 'LocationConstraint' --output text 2>/dev/null || true)"
+  [ -z "$reg" ] || [ "$reg" = "None" ] && reg="us-east-1"
+  [ "$reg" = "EU" ] && reg="eu-west-1"
+  if [ -z "$reg" ] && command -v curl >/dev/null 2>&1; then
+    reg="$(curl -sI "https://${b}.s3.amazonaws.com/" | tr -d '\r' | awk -F': ' 'BEGIN{IGNORECASE=1}/^x-amz-bucket-region:/{print $2;exit}')"
+  fi
+  echo "$reg"
+}
 
 join_path() { a="${1%/}"; b="${2#/}"; echo "${a}/${b}"; }
 
@@ -55,8 +40,9 @@ upload_one() {
   remote_base="${S3_BUCKET%/}"
   [ -n "${S3_SUBFOLDER:-}" ] && remote_base="$(join_path "$remote_base" "$S3_SUBFOLDER")"
   remote_path="$(join_path "$remote_base" "RACHEL/$(basename "$file_path")")"
-  log "⬆️  $(basename "$file_path") → $remote_path"
-  if out="$(aws s3 cp "$file_path" "$remote_path" 2>&1)"; then
+  reg="$(bucket_region)"
+  log "⬆️  $(basename "$file_path") → $remote_path (region=$reg)"
+  if out="$(aws --region "$reg" s3 cp "$file_path" "$remote_path" 2>&1)"; then
     log "✅ OK: $(basename "$file_path")"
     return 0
   else
@@ -65,16 +51,10 @@ upload_one() {
   fi
 }
 
-# Flush
-set +e
-files=$(ls "$QUEUE_DIR"/*.csv 2>/dev/null)
-rc=$?
-set -e
-if [ $rc -ne 0 ]; then log "Queue empty at $QUEUE_DIR"; exit 0; fi
+QUEUE_DIR="$PROJECT_ROOT/00_DATA/00_UPLOAD_QUEUE"
+set +e; files=$(ls "$QUEUE_DIR"/*.csv 2>/dev/null); rc=$?; set -e
+[ $rc -ne 0 ] && { log "Queue empty at $QUEUE_DIR"; exit 0; }
 
 fail=0
-for f in $files; do
-  if upload_one "$f"; then rm -f "$f"; else fail=$((fail+1)); fi
-done
-
-if [ $fail -eq 0 ]; then log "All queued files uploaded."; else log "$fail file(s) failed; see messages above."; fi
+for f in $files; do if upload_one "$f"; then rm -f "$f"; else fail=$((fail+1)); fi; done
+[ $fail -eq 0 ] && log "All queued files uploaded." || log "$fail file(s) failed; see messages above."
