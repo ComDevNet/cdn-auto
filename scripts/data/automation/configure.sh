@@ -1,5 +1,5 @@
 #!/bin/bash
-# cdn-auto configure (defaults-first, improved subfolder discovery)
+# cdn-auto configure (defaults-first, fixed subfolder display)
 set -euo pipefail
 
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
@@ -15,7 +15,6 @@ SERVICE_GROUP="$SERVICE_USER"
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 say() { echo "[$(ts)] $*"; }
-
 have() { command -v "$1" >/dev/null 2>&1; }
 have_whiptail() { have whiptail; }
 
@@ -83,15 +82,7 @@ check_aws_identity() {
   local out rc
   out="$(aws_su sts get-caller-identity --output text 2>&1)"; rc=$?
   (( rc == 0 )) && { say "✅ AWS identity OK for '$SERVICE_USER'."; return 0; }
-  if echo "$out" | grep -qi 'You must specify a region'; then
-    say "⚠️  AWS default region not set for '$SERVICE_USER'."
-    if confirm "Run 'aws configure' for '$SERVICE_USER' now?"; then
-      if [[ -n "${SUDO_USER:-}" && "$SERVICE_USER" != "$USER" ]]; then sudo -u "$SERVICE_USER" aws configure || true; else aws configure || true; fi
-      out="$(aws_su sts get-caller-identity --output text 2>&1)"; rc=$?
-      (( rc == 0 )) && { say "✅ AWS identity OK after configure."; return 0; }
-    fi
-  fi
-  say "⚠️  AWS identity not confirmed for '$SERVICE_USER'. You can still continue and enter paths manually."
+  say "⚠️  AWS identity not confirmed for '$SERVICE_USER' (you can still continue)."
   return 1
 }
 
@@ -144,7 +135,7 @@ while :; do
   validate_device_location "$DEVICE_LOCATION" && break || say "Invalid location. Use 2-64 chars: [A-Za-z0-9_-]"
 done
 
-# Bucket discovery (defaults only)
+# Bucket discovery
 pick_bucket() {
   local out rc err="" opts=()
   out="$(aws_capture s3 ls 2>&1)"; rc=$?
@@ -183,38 +174,33 @@ pick_bucket() {
 }
 pick_bucket
 
-# Improved subfolder discovery: s3api list-objects-v2 --delimiter '/'; fallback to 'aws s3 ls' PRE parsing
+# FIXED subfolder discovery: split tab-separated 's3api ... --output text' into separate items
 pick_subfolder() {
   local bucket_name="${S3_BUCKET#s3://}"; bucket_name="${bucket_name%%/*}"
   local opts=( "NONE" "<bucket root>" "CUSTOM" "Enter subfolder manually" )
-  local added=0
+  local prefixes_text="" rc=0
 
-  # Try s3api with delimiter to get first-level prefixes
-  local prefixes rc out
-  out="$(aws_capture s3api list-objects-v2 --bucket "$bucket_name" --delimiter '/' --query 'CommonPrefixes[].Prefix' --output text 2>&1)"; rc=$?
-  if (( rc == 0 )); then
-    while IFS=$'\t' read -r p; do
+  prefixes_text="$(aws_capture s3api list-objects-v2 --bucket "$bucket_name" --delimiter '/' --query 'CommonPrefixes[].Prefix' --output text 2>&1)"; rc=$?
+  if (( rc == 0 )) && [[ -n "$prefixes_text" && "$prefixes_text" != "None" ]]; then
+    # Convert tabs to newlines, strip trailing '/', drop empties
+    while IFS= read -r p; do
       p="${p%/}"
-      [[ -n "$p" ]] && { opts+=( "$p" "$p" ); added=$((added+1)); }
-    done <<< "$out"
+      [[ -n "$p" ]] && opts+=( "$p" "$p" )
+    done < <(printf '%s' "$prefixes_text" | tr '\t' '\n' | sed '/^ *$/d')
   else
-    # Fallback to 'aws s3 ls' parsing (PRE lines)
-    out="$(aws_capture s3 ls "s3://$bucket_name/" 2>&1)"; rc=$?
-    if (( rc == 0 )); then
-      while IFS= read -r line; do
-        if [[ "$line" == PRE* ]]; then
-          p="$(echo "$line" | awk '{print $2}' | sed 's:/$::')"
-          [[ -n "$p" ]] && { opts+=( "$p" "$p" ); added=$((added+1)); }
-        fi
-      done <<< "$out"
-    fi
+    # Fallback to 'aws s3 ls' PRE parsing
+    local lsout; lsout="$(aws_capture s3 ls "s3://$bucket_name/" 2>&1 || true)"
+    while IFS= read -r line; do
+      if [[ "$line" == PRE* ]]; then
+        p="$(echo "$line" | awk '{print $2}' | sed 's:/$::')"
+        [[ -n "$p" ]] && opts+=( "$p" "$p" )
+      fi
+    done <<< "$lsout"
   fi
 
-  # If nothing discovered, the menu still shows <root> and CUSTOM so user isn't stuck
   local choice
   choice="$(menu_select_cancelable "Select S3 subfolder in s3://$bucket_name/" 20 74 12 "${opts[@]}")"
   [[ "$choice" == "__EXIT__" ]] && exit 2
-
   case "$choice" in
     NONE) S3_SUBFOLDER="" ;;
     CUSTOM)
