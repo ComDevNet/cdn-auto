@@ -1,32 +1,43 @@
 #!/bin/bash
 # Non-interactive automation runner for Raspberry Pi
-# Reads ./config/automation.conf (inside repo) and runs: collect → process → filter → upload
+# Reads ./config/automation.conf and runs: collect → process → filter → upload
 set -euo pipefail
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { echo "[$(ts)] $*"; }
 
-# Resolve project root (this file at scripts/data/automation/runner.sh)
+# --- Locate project root ---
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$PROJECT_ROOT"
 
 CONFIG_FILE="$PROJECT_ROOT/config/automation.conf"
+
 if [[ ! -f "$CONFIG_FILE" ]]; then
-  log "❌ Missing config: $CONFIG_FILE"
-  log "Run: sudo ./scripts/data/automation/configure.sh"
+  log "❌ Missing config at $CONFIG_FILE. Run: sudo ./scripts/data/automation/configure.sh"
+  exit 1
+fi
+if [[ ! -r "$CONFIG_FILE" ]]; then
+  OWNER="$(stat -c '%U' "$CONFIG_FILE" 2>/dev/null || echo '?')"
+  PERM="$(stat -c '%A' "$CONFIG_FILE" 2>/dev/null || echo '?')"
+  log "❌ Config not readable ($CONFIG_FILE). Owner=$OWNER Perm=$PERM"
+  log "   Fix: sudo chown pi:pi $CONFIG_FILE && sudo chmod 600 $CONFIG_FILE"
   exit 1
 fi
 
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
 
+# Export optional AWS env if provided
+export AWS_PROFILE="${AWS_PROFILE:-}"
+export AWS_DEFAULT_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
+
 # Defaults
 SERVER_VERSION="${SERVER_VERSION:-v2}"
 DEVICE_LOCATION="${DEVICE_LOCATION:-device}"
 PYTHON_SCRIPT="${PYTHON_SCRIPT:-oc4d}" # oc4d | cape_coast_d (v2 only)
 S3_BUCKET="${S3_BUCKET:-s3://example-bucket}"
-S3_SUBFOLDER="${S3_SUBFOLDER:-default}"
+S3_SUBFOLDER="${S3_SUBFOLDER:-}"
 SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
 
@@ -42,23 +53,29 @@ TODAY_YMD="$(date '+%Y_%m_%d')"
 NEW_FOLDER="${DEVICE_LOCATION}_logs_${TODAY_YMD}"
 COLLECT_DIR="$DATA_DIR/$NEW_FOLDER"
 
-_join_s3() {
-  local a="$1" b="$2"; a="${a%/}"; b="${b#/}"; echo "${a}/${b}"
+join_path() { local a="${1%/}" b="${2#/}"; echo "${a}/${b}"; }
+
+# Simple internet check (does not require AWS perms)
+has_internet() {
+  getent hosts s3.amazonaws.com >/dev/null 2>&1 || return 1
+  if command -v curl >/dev/null 2>&1; then
+    timeout 5s curl -Is https://s3.amazonaws.com >/dev/null 2>&1 || return 1
+  fi
+  return 0
 }
 
-has_s3() { timeout 10s aws s3 ls "$S3_BUCKET" >/dev/null 2>&1; }
+aws_cp() { env AWS_PROFILE="${AWS_PROFILE:-}" AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-}" aws s3 cp "$@"; }
 
 upload_one() {
   local file_path="$1"
-  local remote_base="$(_join_s3 "$S3_BUCKET" "$S3_SUBFOLDER")"
-  local remote_path="$(_join_s3 "$remote_base" "RACHEL/$(basename "$file_path")")"
+  local remote_base="${S3_BUCKET%/}"
+  [[ -n "$S3_SUBFOLDER" ]] && remote_base="$(join_path "$remote_base" "$S3_SUBFOLDER")"
+  local remote_path="$(join_path "$remote_base" "RACHEL/$(basename "$file_path")")"
   log "⬆️  Uploading $(basename "$file_path") → $remote_path"
-  if timeout 180s aws s3 cp "$file_path" "$remote_path"; then
-    log "✅ Uploaded: $(basename "$file_path")"
-    return 0
+  if timeout 180s aws_cp "$file_path" "$remote_path"; then
+    log "✅ Uploaded: $(basename "$file_path")"; return 0
   else
-    log "⚠️ Upload failed: $(basename "$file_path")"
-    return 1
+    log "⚠️ Upload failed, will queue: $(basename "$file_path")"; return 1
   fi
 }
 
@@ -78,9 +95,7 @@ case "$SERVER_VERSION" in
        -name '*.gz' \) -exec cp -n {} "$COLLECT_DIR"/ \;
     ;;
   *)
-    log "❌ Unknown SERVER_VERSION '$SERVER_VERSION'"
-    exit 1
-    ;;
+    log "❌ Unknown SERVER_VERSION '$SERVER_VERSION'"; exit 1;;
 esac
 
 shopt -s nullglob
@@ -105,8 +120,7 @@ python3 "$PROCESSOR" "$NEW_FOLDER"
 PROCESSED_DIR="$PROCESSED_ROOT/$NEW_FOLDER"
 SUMMARY="$PROCESSED_DIR/summary.csv"
 if [[ ! -s "$SUMMARY" ]]; then
-  log "❌ Missing or empty summary at $SUMMARY"
-  exit 1
+  log "❌ Missing or empty summary at $SUMMARY"; exit 1
 fi
 
 MONTH="$(echo "$NEW_FOLDER" | awk -F'_' '{print $(NF-1)}' || true)"
@@ -118,26 +132,24 @@ shopt -s nullglob
 FINAL_CAND=( "$PROCESSED_DIR/${DEVICE_LOCATION}_${MONTH}_"*"_access_logs.csv" )
 shopt -u nullglob
 if [[ ${#FINAL_CAND[@]} -eq 0 ]]; then
-  log "❌ Could not locate final CSV after filtering."
-  exit 1
+  log "❌ Could not locate final CSV after filtering."; exit 1
 fi
 FINAL_CSV="${FINAL_CAND[0]}"
 log "📦 Final CSV: $(basename "$FINAL_CSV")"
 
-if has_s3; then
-  log "🌐 S3 reachable. Flushing queue…"
+# Upload logic with offline queue
+if has_internet; then
+  log "🌐 Internet OK. Flushing queue…"
   shopt -s nullglob
   for q in "$QUEUE_DIR"/*.csv; do
-    if upload_one "$q"; then rm -f "$q"; else log "Leave queued: $(basename "$q")"; fi
+    if upload_one "$q"; then rm -f "$q"; else log "Leaving queued: $(basename "$q")"; fi
   done
   shopt -u nullglob
   if upload_one "$FINAL_CSV"; then
     log "✅ Run finished — upload complete."
   else
-    log "⚠️ Upload failed; queueing new file."
-    cp -f "$FINAL_CSV" "$QUEUE_DIR/"
+    log "⚠️ Upload failed; queueing new file."; cp -f "$FINAL_CSV" "$QUEUE_DIR/"
   fi
 else
-  log "📵 No S3 connectivity. Queueing new file."
-  cp -f "$FINAL_CSV" "$QUEUE_DIR/"
+  log "📵 No internet. Queueing new file."; cp -f "$FINAL_CSV" "$QUEUE_DIR/"
 fi
