@@ -74,5 +74,6 @@ sudo chmod +x scripts/data/collection/*.sh
 sudo chmod +x scripts/data/process/*.sh
 sudo chmod +x scripts/data/upload/*.sh
 sudo chmod +x scripts/troubleshoot/*.sh
+sudo chmod +x scripts/data/automation/*.sh
 
 exec ./main.sh

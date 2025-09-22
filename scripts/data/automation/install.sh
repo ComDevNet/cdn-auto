@@ -48,7 +48,7 @@ WRAPPER_SCRIPT_PATH="/usr/local/bin/run_v5_log_processor.sh"
 # This makes the script work no matter where it's cloned.
 INSTALLER_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 PROJECT_ROOT=$(cd "$INSTALLER_DIR/../../.." && pwd)
-TARGET_SCRIPT="$PROJECT_ROOT/scripts/data/all.sh"
+TARGET_SCRIPT="$PROJECT_ROOT/scripts/data/automation/runner.sh"
 
 echo "📁 Project root directory: $PROJECT_ROOT"
 echo "🎯 Target script: $TARGET_SCRIPT"
@@ -80,7 +80,7 @@ cd "$PROJECT_ROOT"
 
 # Execute the main data processing script (all.sh runs collect, process, upload)
 # All output (stdout and stderr) is appended to the log file
-./scripts/data/all.sh >> "$LOG_FILE" 2>&1
+./scripts/data/automation/runner.sh >> "$LOG_FILE" 2>&1
 
 echo "--- V5 Automation run finished at \$(date) ---"
 echo "" 
