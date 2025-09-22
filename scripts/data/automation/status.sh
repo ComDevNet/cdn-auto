@@ -187,13 +187,17 @@ echo
 hr
 echo "Done."
 
-# Wait for Enter only if we're attached to a terminal (no-op in non-interactive runs)
+# Wait for Enter only if we're attached to a terminal
 if [ -t 0 ]; then
-  printf "\nPress Enter to return to the main menu..."
-  IFS= read -r _   # POSIX-safe read (no -p)
-else
-  # optional: brief pause so output is readable when not interactive
-  sleep 1
+  printf "\nPress Enter to return to the main screen..."
+  IFS= read -r _
+fi
+
+# Re-enter the main menu reliably (works even if the menu used 'exec' to launch us)
+MAIN="$SCRIPT_DIR/main.sh"
+if [ -x "$MAIN" ]; then
+  exec "$MAIN"
 fi
 
 exit 0
+

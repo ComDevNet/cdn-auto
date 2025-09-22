@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runner with sudo-aware config loading
+# Runner: fix AWS_PROFILE handling (unset when empty) + sudo-aware config load
 set -euo pipefail
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { echo "[$(ts)] $*"; }
@@ -19,29 +19,17 @@ load_config() {
     log "⚙️  Config loaded (direct): $src"
     return 0
   fi
-
-  # Try non-interactive sudo first (works under systemd if allowed)
   if command -v sudo >/dev/null 2>&1; then
     tmp="/tmp/cdn_auto_conf.$$.sh"
-    if sudo -n cat "$src" > "$tmp" 2>/dev/null; then
+    if sudo -n cat "$src" > "$tmp" 2>/dev/null || sudo cat "$src" > "$tmp" 2>/dev/null; then
       chmod 600 "$tmp"
       # shellcheck disable=SC1090
       source "$tmp"
       rm -f "$tmp"
-      log "⚙️  Config loaded (sudo -n read): $src"
-      return 0
-    fi
-    # Try interactive sudo (will likely fail under systemd but fine when run manually)
-    if sudo cat "$src" > "$tmp" 2>/dev/null; then
-      chmod 600 "$tmp"
-      # shellcheck disable=SC1090
-      source "$tmp"
-      rm -f "$tmp"
-      log "⚙️  Config loaded (sudo read): $src"
+      log "⚙️  Config loaded (sudo): $src"
       return 0
     fi
   fi
-
   local owner perm
   owner="$(stat -c '%U' "$src" 2>/dev/null || echo '?')"
   perm="$(stat -c '%A' "$src" 2>/dev/null || echo '?')"
@@ -49,12 +37,23 @@ load_config() {
   log "   Fix: sudo chown $(id -un):$(id -gn) \"$src\" && sudo chmod 600 \"$src\""
   exit 1
 }
-
 load_config
 
-# Export optional AWS env if provided
-export AWS_PROFILE="${AWS_PROFILE:-}"
-export AWS_DEFAULT_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
+# --- Normalize AWS env ---
+# Only export when non-empty; otherwise unset so AWS CLI uses default credentials
+if [[ -n "${AWS_PROFILE:-}" ]]; then
+  export AWS_PROFILE
+else
+  unset AWS_PROFILE
+fi
+# Prefer AWS_REGION from config; fall back to existing AWS_DEFAULT_REGION; otherwise unset
+if [[ -n "${AWS_REGION:-}" ]]; then
+  export AWS_DEFAULT_REGION="$AWS_REGION"
+elif [[ -n "${AWS_DEFAULT_REGION:-}" ]]; then
+  export AWS_DEFAULT_REGION
+else
+  unset AWS_DEFAULT_REGION
+fi
 
 # Defaults
 SERVER_VERSION="${SERVER_VERSION:-v2}"
@@ -82,7 +81,10 @@ has_internet() {
   return 0
 }
 
-aws_cp() { env AWS_PROFILE="${AWS_PROFILE:-}" AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-}" aws s3 cp "$@"; }
+aws_cp() {
+  # use env-based profile/region only if set (we normalized above)
+  aws s3 cp "$@"
+}
 
 upload_one() {
   local file_path="$1"
