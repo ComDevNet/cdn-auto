@@ -186,3 +186,4 @@ fi
 echo
 hr
 echo "Done."
+exec ./scripts/data/automation/main.sh
