@@ -1,5 +1,5 @@
 #!/bin/bash
-# cdn-auto configuration: repo-local config + AWS preflight + discovery + live test
+# cdn-auto configuration v5: repo-local config + AWS preflight + discovery + live test
 set -euo pipefail
 
 # --- Locate project root ---
@@ -9,7 +9,7 @@ CONFIG_DIR="$PROJECT_ROOT/config"
 CONFIG_FILE="$CONFIG_DIR/automation.conf"
 mkdir -p "$CONFIG_DIR"
 
-# --- Find service user from the installed unit (fallback to pi or SUDO_USER) ---
+# --- Detect service user (for owning the config & running AWS commands) ---
 SERVICE_UNIT="/etc/systemd/system/v5-log-processor.service"
 SERVICE_USER="$(awk -F= '/^User=/{print $2}' "$SERVICE_UNIT" 2>/dev/null | tail -n1)"
 if [[ -z "${SERVICE_USER:-}" ]]; then
@@ -24,10 +24,24 @@ have_whiptail() { command -v whiptail >/dev/null 2>&1; }
 have_curl() { command -v curl >/dev/null 2>&1; }
 have_aws() { command -v aws >/dev/null 2>&1; }
 
+fatal_exit() {
+  local msg="$1"
+  if have_whiptail; then
+    whiptail --title "Configuration aborted" --msgbox "$msg" 12 74 || true
+  else
+    echo "ABORT: $msg"
+  fi
+  exit 2
+}
+
 confirm() {
   local msg="$1"
-  if have_whiptail; then whiptail --yesno "$msg" 10 74; else
-    read -rp "$msg [y/N]: " yn; [[ "${yn,,}" == "y" || "${yn,,}" == "yes" ]]
+  if have_whiptail; then
+    whiptail --yesno "$msg" 10 74
+    return $?
+  else
+    read -rp "$msg [y/N]: " yn
+    [[ "${yn,,}" == "y" || "${yn,,}" == "yes" ]]
   fi
 }
 
@@ -37,20 +51,46 @@ prompt_text() {
   if have_whiptail; then
     val="$(whiptail --inputbox "$title" 10 74 "$default" 3>&1 1>&2 2>&3 || true)"
   else
-    read -rp "$title [$default]: " val; val="${val:-$default}"
+    read -rp "$title [$default]: " val
+    val="${val:-$default}"
   fi
   printf -v "$outvar" '%s' "$val"
 }
 
 menu_select() {
+  # Non-cancelable generic menu (used elsewhere)
   if have_whiptail; then
     whiptail --nocancel --notags --menu "$1" "$2" "$3" "$4" "${@:5}" 3>&1 1>&2 2>&3
+  else
+    local title="$1"; shift; shift; shift; shift
+    local options=( "$@" )
+    local n=$(( ${#options[@]} / 2 ))
+    echo "$title"
+    for ((i=0;i<${#options[@]};i+=2)); do printf " %2d) %s\n" "$((i/2+1))" "${options[i+1]}"; done
+    local c; while :; do read -rp "Choose [1-$n]: " c
+      if [[ "$c" =~ ^[0-9]+$ ]] && (( c>=1 && c<=n )); then echo "${options[$(((c-1)*2))]}"; return 0; fi
+      echo "Invalid choice."
+    done
+  fi
+}
+
+menu_select_cancelable() {
+  # Cancelable menu with Exit button. Returns chosen tag; exits if canceled.
+  # usage: menu_select_cancelable "Title" height width menuheight options...
+  if have_whiptail; then
+    local choice
+    choice="$(whiptail --cancel-button "Exit" --ok-button "Select" --notags --menu "$1" "$2" "$3" "$4" "${@:5}" 3>&1 1>&2 2>&3)" || fatal_exit "User exited at selection: $1"
+    echo "$choice"
   else
     local title="$1"; shift; shift; shift; shift
     local options=( "$@" ); local n=$(( ${#options[@]} / 2 ))
     echo "$title"
     for ((i=0;i<${#options[@]};i+=2)); do printf " %2d) %s\n" "$((i/2+1))" "${options[i+1]}"; done
-    local c; while :; do read -rp "Choose [1-$n]: " c
+    echo " x) Exit"
+    local c
+    while :; do
+      read -rp "Choose [1-$n or x to exit]: " c
+      if [[ "$c" == "x" || "$c" == "X" ]]; then fatal_exit "User exited at selection: $title"; fi
       if [[ "$c" =~ ^[0-9]+$ ]] && (( c>=1 && c<=n )); then echo "${options[$(((c-1)*2))]}"; return 0; fi
       echo "Invalid choice."
     done
@@ -62,69 +102,63 @@ validate_device_location() { [[ "$1" =~ ^[A-Za-z0-9_-]{2,64}$ ]]; }
 validate_bucket_url() { [[ "$1" =~ ^s3://[a-z0-9\.\-]{3,63}(/.*)?$ ]]; }
 sanitize_subfolder() { local sf="${1#/}"; sf="${sf%/}"; echo "$sf"; }
 
-# --- AWS helpers (execute as SERVICE_USER when possible) ---
+# --- AWS helpers (execute as SERVICE_USER) ---
 aws_as_service_user() {
-  # Use existing env AWS_PROFILE/AWS_REGION if set in shell; pass through to sudo env
   if [[ -n "${SUDO_USER:-}" && "$SERVICE_USER" != "$USER" ]]; then
     sudo -u "$SERVICE_USER" env AWS_PROFILE="${AWS_PROFILE:-}" AWS_DEFAULT_REGION="${AWS_REGION:-}" aws "$@"
   else
     env AWS_PROFILE="${AWS_PROFILE:-}" AWS_DEFAULT_REGION="${AWS_REGION:-}" aws "$@"
   fi
 }
-aws_capture() {
-  local out
-  if out="$(aws_as_service_user "$@" 2>/dev/null)"; then printf '%s' "$out"; return 0; fi
-  return 1
-}
+
+aws_capture() { aws_as_service_user "$@" 2>/dev/null; }
 
 # --- Preflight checks ---
 check_network() {
-  # DNS + HTTPS to S3 public endpoint
   getent hosts s3.amazonaws.com >/dev/null 2>&1 || return 1
-  if have_curl; then
-    timeout 5s curl -Is https://s3.amazonaws.com >/dev/null 2>&1 || return 1
-  fi
+  if have_curl; then timeout 5s curl -Is https://s3.amazonaws.com >/dev/null 2>&1 || return 1; fi
   return 0
 }
 
 check_aws_identity() {
-  if ! have_aws; then
-    say "❌ AWS CLI not installed."
-    return 2
+  if ! have_aws; then say "❌ AWS CLI not installed."; return 2; fi
+  if ! aws_as_service_user sts get-caller-identity --output text >/dev/null 2>&1; then
+    return 1
   fi
-  local id rc=0
-  if ! id="$(aws_as_service_user sts get-caller-identity --output text 2>&1)"; then
-    say "❌ AWS identity check failed for user '$SERVICE_USER'. Error:"
-    echo "$id"
-    rc=1
-  else
-    say "✅ AWS identity (user '$SERVICE_USER'): $id"
-    rc=0
-  fi
-  return $rc
+  return 0
 }
 
 ensure_preflight_ok() {
-  if ! check_network; then
-    if have_whiptail; then whiptail --title "Network check" --msgbox "Cannot reach s3.amazonaws.com over HTTPS.\nCheck internet or DNS and try again." 12 74; fi
-    say "❌ Network unreachable (s3.amazonaws.com)."
-    return 1
+  local net_ok=0 id_ok=0
+  if check_network; then net_ok=1; else net_ok=0; fi
+  if check_aws_identity; then id_ok=1; else id_ok=0; fi
+
+  if (( net_ok==1 && id_ok==1 )); then
+    say "✅ Network + AWS identity OK for user '$SERVICE_USER'."
+    return 0
   fi
-  local rc=0
-  if ! check_aws_identity; then
-    if confirm "Run 'aws configure' for user '$SERVICE_USER' now?"; then
-      if [[ -n "${SUDO_USER:-}" && "$SERVICE_USER" != "$USER" ]]; then
-        sudo -u "$SERVICE_USER" aws configure || true
-      else
-        aws configure || true
-      fi
-      # re-check identity
-      check_aws_identity || rc=1
+
+  local msg=""
+  if (( net_ok==0 )); then msg+="• Network to s3.amazonaws.com unreachable.\n"; fi
+  if (( id_ok==0 )); then msg+="• AWS credentials not available/valid for user '$SERVICE_USER'.\n"; fi
+  msg+="\nChoose **Exit** to stop configuration now, or **Continue** for manual entry."
+  if have_whiptail; then
+    if whiptail --title "Preflight checks failed" --yes-button "Exit" --no-button "Continue" --yesno "$msg" 14 74; then
+      fatal_exit "Preflight failed; user chose Exit."
+    fi
+  else
+    echo -e "Preflight checks failed:\n$msg"
+    read -rp "Exit now? [Y/n]: " yn; [[ "${yn,,}" != "n" ]] && fatal_exit "Preflight failed; user chose Exit."
+  fi
+
+  # Optional: guide aws configure
+  if (( id_ok==0 )) && confirm "Run 'aws configure' for user '$SERVICE_USER' now?"; then
+    if [[ -n "${SUDO_USER:-}" && "$SERVICE_USER" != "$USER" ]]; then
+      sudo -u "$SERVICE_USER" aws configure || true
     else
-      rc=1
+      aws configure || true
     fi
   fi
-  return $rc
 }
 
 # --- Load existing config if present ---
@@ -144,12 +178,10 @@ RUN_INTERVAL="${RUN_INTERVAL:-86400}"
 AWS_PROFILE="${AWS_PROFILE:-}"
 AWS_REGION="${AWS_REGION:-}"
 
-# --- Start with preflight so bucket discovery isn't blank ---
-if ! ensure_preflight_ok; then
-  say "Proceeding, but S3 discovery may be empty until AWS/network are fixed."
-fi
+# Run preflight so discovery won't be silently empty
+ensure_preflight_ok || true
 
-# Optional: discover default region
+# Try to infer default region
 if [[ -z "$AWS_REGION" && $(have_aws && echo yes) == "yes" ]]; then
   AWS_REGION="$(aws_capture configure get region || true)"
 fi
@@ -180,72 +212,101 @@ while :; do
   say "Invalid location. Use 2-64 chars: [A-Za-z0-9_-]"
 done
 
-# 4) AWS region (optional; helps avoid redirects)
+# 4) Region (optional)
 prompt_text "AWS region (optional, e.g., us-east-1)" "${AWS_REGION}" AWS_REGION
 
-# 5) S3 bucket discovery
+# 5) Bucket discovery with EXIT on error
 pick_bucket() {
-  local buckets_text="" buckets=() opts=()
+  local out rc err="" buckets=() opts=()
+
   if have_aws && check_network; then
-    buckets_text="$(aws_capture s3 ls || true)"
-  else
-    buckets_text=""
-  fi
-  mapfile -t buckets <<<"$buckets_text"
-  opts+=( "CUSTOM" "Enter bucket manually" )
-  local added=0
-  for bline in "${buckets[@]}"; do
-    # expect "2025-.. ..:..:.. bucket-name"
-    local b="$(echo "$bline" | awk '{print $3}')"
-    [[ -n "$b" ]] || continue
-    opts+=( "$b" "$b" )
-    added=$((added+1))
-    (( added>=50 )) && break
-  done
-  local choice
-  if (( ${#opts[@]} > 2 )); then
-    choice="$(menu_select "Select S3 bucket (discovered via AWS CLI for user '$SERVICE_USER')" 20 74 12 "${opts[@]}")"
-    if [[ "$choice" == "CUSTOM" ]]; then
-      while :; do
-        prompt_text "S3 bucket (e.g., s3://my-bucket)" "${S3_BUCKET}" S3_BUCKET
-        S3_BUCKET="${S3_BUCKET%/}"
-        validate_bucket_url "$S3_BUCKET" && break || say "Bucket must start with s3://"
-      done
-    else
-      S3_BUCKET="s3://$choice"
+    out="$(aws_as_service_user s3 ls 2>&1)"; rc=$?
+    if (( rc != 0 )); then err="$out"; out=""
     fi
   else
-    # fall back to manual
+    err="Network or AWS CLI unavailable."
+    out=""
+  fi
+
+  if [[ -z "$out" ]]; then
+    local msg="Could not discover S3 buckets for user '$SERVICE_USER'.\n\nError:\n${err:-<no details>}\n\nSelect **Exit** to stop now, or **Manual** to type a bucket URL."
+    if have_whiptail; then
+      if whiptail --title "Bucket discovery failed" --yes-button "Exit" --no-button "Manual" --yesno "$msg" 18 74; then
+        fatal_exit "User exited at bucket discovery."
+      fi
+    else
+      echo -e "$msg"
+      read -rp "Exit? [Y/n]: " yn; [[ "${yn,,}" != "n" ]] && fatal_exit "User exited at bucket discovery."
+    fi
+    # Manual entry
     while :; do
       prompt_text "S3 bucket (e.g., s3://my-bucket)" "${S3_BUCKET}" S3_BUCKET
       S3_BUCKET="${S3_BUCKET%/}"
       validate_bucket_url "$S3_BUCKET" && break || say "Bucket must start with s3://"
     done
+    return 0
+  fi
+
+  # Build discovered menu
+  while IFS= read -r line; do
+    local b="$(echo "$line" | awk '{print $3}')"
+    [[ -n "$b" ]] && opts+=( "$b" "$b" )
+  done <<< "$out"
+  opts+=( "CUSTOM" "Enter bucket manually" )
+
+  local choice
+  choice="$(menu_select_cancelable "Select S3 bucket (discovered via AWS CLI)" 20 74 12 "${opts[@]}")"
+  if [[ "$choice" == "CUSTOM" ]]; then
+    while :; do
+      prompt_text "S3 bucket (e.g., s3://my-bucket)" "${S3_BUCKET}" S3_BUCKET
+      S3_BUCKET="${S3_BUCKET%/}"
+      validate_bucket_url "$S3_BUCKET" && break || say "Bucket must start with s3://"
+    done
+  else
+    S3_BUCKET="s3://$choice"
   fi
 }
 pick_bucket
 
-# 6) Subfolder discovery (top-level prefixes)
+# 6) Subfolder discovery (with Exit on AccessDenied-like errors)
 pick_subfolder() {
   local bucket_name="${S3_BUCKET#s3://}"
-  local subs_text="" subs=() opts=()
+  bucket_name="${bucket_name%%/*}"
+  local out rc err="" subs=() opts=()
+
   if have_aws && check_network; then
-    subs_text="$(aws_capture s3 ls "s3://$bucket_name/" || true)"
-  fi
-  # Parse "PRE folder/"
-  while IFS= read -r line; do
-    if [[ "$line" == PRE* ]]; then
-      subs+=( "$(echo "$line" | awk '{print $2}' | sed 's:/$::')" )
+    out="$(aws_as_service_user s3 ls "s3://$bucket_name/" 2>&1)"; rc=$?
+    if (( rc != 0 )); then err="$out"; out=""
     fi
-  done <<< "$subs_text"
-  opts+=( "NONE" "<bucket root>" "CUSTOM" "Enter subfolder manually" )
-  local added=0
-  for s in "${subs[@]}"; do
-    [[ -n "$s" ]] || continue
-    opts+=( "$s" "$s" ); added=$((added+1)); (( added>=100 )) && break
-  done
+  else
+    err="Network or AWS CLI unavailable."; out=""
+  fi
+
+  opts+=( "NONE" "<bucket root>" )
+  if [[ -n "$out" ]]; then
+    while IFS= read -r line; do
+      if [[ "$line" == PRE* ]]; then
+        subs+=( "$(echo "$line" | awk '{print $2}' | sed 's:/$::')" )
+      fi
+    done <<< "$out"
+    for s in "${subs[@]}"; do opts+=( "$s" "$s" ); done
+  else
+    if [[ -n "$err" ]]; then
+      local msg="Could not list top-level prefixes in s3://$bucket_name/.\n\nError:\n${err:-<no details>}\n\nSelect **Exit** to stop now, or **Manual** to type a subfolder."
+      if have_whiptail; then
+        if whiptail --title "Subfolder discovery failed" --yes-button "Exit" --no-button "Manual" --yesno "$msg" 18 74; then
+          fatal_exit "User exited at subfolder discovery."
+        fi
+      else
+        echo -e "$msg"
+        read -rp "Exit? [Y/n]: " yn; [[ "${yn,,}" != "n" ]] && fatal_exit "User exited at subfolder discovery."
+      fi
+    fi
+    opts+=( "CUSTOM" "Enter subfolder manually" )
+  fi
+
   local choice
-  choice="$(menu_select "Select S3 subfolder in s3://$bucket_name/ (if AccessDenied appears, choose CUSTOM)" 20 74 12 "${opts[@]}")"
+  choice="$(menu_select_cancelable "Select S3 subfolder in s3://$bucket_name/" 20 74 12 "${opts[@]}")"
   case "$choice" in
     NONE) S3_SUBFOLDER="" ;;
     CUSTOM)
@@ -293,7 +354,7 @@ Config file    : $CONFIG_FILE
 EOF
 )
 if have_whiptail; then whiptail --title "Confirm configuration" --msgbox "$summary" 19 74; else echo; echo "$summary"; echo; fi
-if ! confirm "Save configuration?"; then say "Aborted."; exit 1; fi
+if ! confirm "Save configuration?"; then fatal_exit "User canceled at confirmation."; fi
 
 # --- Save config and set ownership to service user ---
 umask 077
@@ -315,12 +376,9 @@ sudo chown "${SERVICE_USER}:${SERVICE_GROUP}" "$CONFIG_FILE"
 sudo chmod 600 "$CONFIG_FILE"
 say "💾 Saved: $CONFIG_FILE (owner: $SERVICE_USER)"
 
-# --- Live test upload (no ListBucket required) ---
+# --- Live test upload ---
 test_upload() {
-  if ! have_aws; then
-    say "❌ AWS CLI not installed."; return 1
-  fi
-  # Build test file
+  if ! have_aws; then say "❌ AWS CLI not installed."; return 1; fi
   local tsf="$(date +%Y%m%d_%H%M%S)"
   local tmpfile; tmpfile="$(mktemp /tmp/cdn_auto_cfgtest.XXXXXX)"
   cat > "$tmpfile" <<EOD
@@ -332,33 +390,22 @@ device_location: $DEVICE_LOCATION
 bucket: $S3_BUCKET
 subfolder: ${S3_SUBFOLDER:-<root>}
 EOD
-
-  # Compose S3 URL and also bucket/key for head-object
-  local s3url="${S3_BUCKET%/}"
-  [[ -n "$S3_SUBFOLDER" ]] && s3url="${s3url}/${S3_SUBFOLDER}"
+  local s3url="${S3_BUCKET%/}"; [[ -n "$S3_SUBFOLDER" ]] && s3url="${s3url}/${S3_SUBFOLDER}"
   local key_path="RACHEL/_config_test_${tsf}.txt"
   local full="${s3url}/${key_path}"
   local bucket_name="${S3_BUCKET#s3://}"; bucket_name="${bucket_name%%/*}"
-  local key_key=""
-  if [[ -n "$S3_SUBFOLDER" ]]; then key_key="${S3_SUBFOLDER}/${key_path}"; else key_key="${key_path}"; fi
-
+  local key_key=""; [[ -n "$S3_SUBFOLDER" ]] && key_key="${S3_SUBFOLDER}/${key_path}" || key_key="${key_path}"
   [[ -n "$AWS_REGION" ]] && export AWS_DEFAULT_REGION="$AWS_REGION"
   [[ -n "$AWS_PROFILE" ]] && export AWS_PROFILE
-
   say "▶ Uploading test object to: $full"
   if ! aws_as_service_user s3 cp "$tmpfile" "$full" >/dev/null 2>&1; then
-    say "❌ Upload failed (PutObject). Check permissions/region/endpoint."
-    rm -f "$tmpfile"; return 1
+    say "❌ Upload failed (PutObject)."; rm -f "$tmpfile"; return 1
   fi
   rm -f "$tmpfile"
-
-  # Try to verify with head-object (GetObject). If denied, still accept the upload.
-  local head_rc=0
-  if ! aws_as_service_user s3api head-object --bucket "$bucket_name" --key "$key_key" >/dev/null 2>&1; then
-    say "⚠️ Verification via head-object failed. This may be OK if the role has PutObject but no GetObject."
-    head_rc=1
-  else
+  if aws_as_service_user s3api head-object --bucket "$bucket_name" --key "$key_key" >/dev/null 2>&1; then
     say "✅ Test upload verified with head-object."
+  else
+    say "⚠️ Upload succeeded, but verification (GetObject) failed. This may be expected if policy denies GetObject."
   fi
   return 0
 }
@@ -367,15 +414,11 @@ attempt=1; max_attempts=3
 until test_upload; do
   say "Configuration test failed ($attempt/$max_attempts)."
   if (( attempt >= max_attempts )); then
-    say "❌ Giving up after $max_attempts attempts. Re-run configure after fixing AWS/network."
-    exit 2
+    fatal_exit "Giving up after $max_attempts attempts. Please fix AWS/network and re-run configure."
   fi
-  if confirm "Open AWS reconfiguration (aws configure) for '$SERVICE_USER' now?"; then
-    if [[ -n "${SUDO_USER:-}" && "$SERVICE_USER" != "$USER" ]]; then
-      sudo -u "$SERVICE_USER" aws configure || true
-    else
-      aws configure || true
-    fi
+  if confirm "Open 'aws configure' for '$SERVICE_USER' now?"; then
+    if [[ -n "${SUDO_USER:-}" && "$SERVICE_USER" != "$USER" ]]; then sudo -u "$SERVICE_USER" aws configure || true
+    else aws configure || true; fi
   fi
   attempt=$((attempt+1))
 done
@@ -404,5 +447,4 @@ sudo systemctl daemon-reload
 sudo systemctl enable "$TIMER" >/dev/null
 sudo systemctl restart "$TIMER"
 say "⏱  Timer updated and started: $TIMER"
-
 say "✅ Configuration complete."
