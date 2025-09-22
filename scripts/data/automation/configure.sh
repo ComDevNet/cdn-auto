@@ -1,5 +1,5 @@
 #!/bin/bash
-# cdn-auto configure (defaults-first + bucket-region autodetect)
+# cdn-auto configure (defaults-first + robust test: regionless→region retry→SSE retry)
 set -euo pipefail
 
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
@@ -71,22 +71,6 @@ aws_su() {
   fi
 }
 aws_capture() { aws_su "$@" 2>/dev/null; }
-
-# --- Region autodetect (no global config changes) ---
-bucket_region() {
-  # 1) Try S3 API (region-agnostic; CLI still wants a region flag, use us-east-1)
-  local b="$1" reg=""
-  reg="$(aws_capture --region us-east-1 s3api get-bucket-location --bucket "$b" --query 'LocationConstraint' --output text 2>/dev/null || true)"
-  if [[ -z "$reg" || "$reg" == "None" ]]; then reg="us-east-1"; fi
-  if [[ "$reg" == "EU" ]]; then reg="eu-west-1"; fi
-  # 2) If still empty (unlikely), try curl header
-  if [[ -z "$reg" ]]; then
-    if have curl; then
-      reg="$(curl -sI "https://${b}.s3.amazonaws.com/" | tr -d '\r' | awk -F': ' 'BEGIN{IGNORECASE=1}/^x-amz-bucket-region:/{print $2;exit}')"
-    fi
-  fi
-  echo "$reg"
-}
 
 check_network() {
   getent hosts s3.amazonaws.com >/dev/null 2>&1 || return 1
@@ -190,22 +174,19 @@ pick_bucket() {
 }
 pick_bucket
 
-# Subfolder discovery (using autodetected region)
+# Subfolder discovery with corrected display
 pick_subfolder() {
   local bucket_name="${S3_BUCKET#s3://}"; bucket_name="${bucket_name%%/*}"
-  local REG; REG="$(bucket_region "$bucket_name")"
   local opts=( "NONE" "<bucket root>" "CUSTOM" "Enter subfolder manually" )
-
-  # Try s3api with delimiter to get top-level prefixes
   local out rc
-  out="$(aws_capture --region "$REG" s3api list-objects-v2 --bucket "$bucket_name" --delimiter '/' --query 'CommonPrefixes[].Prefix' --output text 2>&1)"; rc=$?
+
+  out="$(aws_capture s3api list-objects-v2 --bucket "$bucket_name" --delimiter '/' --query 'CommonPrefixes[].Prefix' --output text 2>&1)"; rc=$?
   if (( rc == 0 )) && [[ -n "$out" && "$out" != "None" ]]; then
     while IFS= read -r p; do
       p="${p%/}"; [[ -n "$p" ]] && opts+=( "$p" "$p" )
     done < <(printf '%s' "$out" | tr '\t' '\n' | sed '/^ *$/d')
   else
-    # Fallback to 'aws s3 ls'
-    out="$(aws_capture --region "$REG" s3 ls "s3://$bucket_name/" 2>&1 || true)"
+    out="$(aws_capture s3 ls "s3://$bucket_name/" 2>&1 || true)"
     while IFS= read -r line; do
       if [[ "$line" == PRE* ]]; then
         p="$(echo "$line" | awk '{print $2}' | sed 's:/$::')"
@@ -229,7 +210,6 @@ pick_subfolder() {
 pick_subfolder
 S3_SUBFOLDER="$(sanitize_subfolder "$S3_SUBFOLDER")"
 
-# Schedule
 sched=$(menu_select "Choose schedule" 15 74 7 \
   hourly "Every hour" \
   daily  "Once per day" \
@@ -239,7 +219,7 @@ sched=$(menu_select "Choose schedule" 15 74 7 \
 case "$sched" in
   hourly) SCHEDULE_TYPE="hourly"; RUN_INTERVAL="3600" ;;
   daily)  SCHEDULE_TYPE="daily";  RUN_INTERVAL="86400" ;;
-  weekly) SCHEDULE_TYPE="weekly"; RUN_INTERVAL="604800" ;;
+  weekly) echo "weekly"; SCHEDULE_TYPE="weekly"; RUN_INTERVAL="604800" ;;
   custom)
     while :; do
       prompt_text "Custom interval in seconds (>=300)" "${RUN_INTERVAL}" RUN_INTERVAL
@@ -248,7 +228,6 @@ case "$sched" in
     ;;
 esac
 
-# Summary
 summary=$(cat <<EOF
 Service user   : $SERVICE_USER
 Server version : $SERVER_VERSION
@@ -263,7 +242,6 @@ EOF
 if have_whiptail; then whiptail --title "Confirm configuration" --msgbox "$summary" 19 74; else echo; echo "$summary"; echo; fi
 if ! confirm "Save configuration?"; then echo "Aborted."; exit 1; fi
 
-# Save
 umask 077
 tmp="${CONFIG_FILE}.tmp"
 cat > "$tmp" <<EOF
@@ -281,36 +259,60 @@ sudo chown "${SERVICE_USER}:${SERVICE_GROUP}" "$CONFIG_FILE"
 sudo chmod 600 "$CONFIG_FILE"
 say "💾 Saved: $CONFIG_FILE (owner: $SERVICE_USER)"
 
-# Live test using discovered region
-test_upload() {
-  if ! have aws; then say "❌ AWS CLI not installed."; return 1; fi
-  local bucket_name="${S3_BUCKET#s3://}"; bucket_name="${bucket_name%%/*}"
-  local REG; REG="$(bucket_region "$bucket_name")"
-  local tsf tmpfile s3url key_path full
-  tsf="$(date +%Y%m%d_%H%M%S)"
-  tmpfile="$(mktemp /tmp/cdn_auto_cfgtest.XXXXXX)"
-  cat > "$tmpfile" <<EOD
-cdn-auto configuration test
-timestamp: $tsf
-server_version: $SERVER_VERSION
-logs_flavor: $PYTHON_SCRIPT
-device_location: $DEVICE_LOCATION
-bucket: $S3_BUCKET
-subfolder: ${S3_SUBFOLDER:-<root>}
-EOD
-  s3url="${S3_BUCKET%/}"; [[ -n "$S3_SUBFOLDER" ]] && s3url="${s3url}/${S3_SUBFOLDER}"
-  key_path="RACHEL/_config_test_${tsf}.txt"
-  full="${s3url}/${key_path}"
+# --- Robust live test ---
+try_put() {
+  local bucket_name="$1" key="$2" body="$3" region="${4:-}" sse="${5:-}"
+  local args=( s3api put-object --bucket "$bucket_name" --key "$key" --body "$body" )
+  [[ -n "$region" ]] && args=( --region "$region" "${args[@]}" )
+  [[ "$sse" == "AES256" ]] && args+=( --server-side-encryption AES256 )
+  local out rc
+  out="$(aws_su "${args[@]}" 2>&1)"; rc=$?
+  echo "$out"
+  return $rc
+}
 
-  say "▶ Test upload (region=$REG) → $full"
-  if ! aws_su --region "$REG" s3 cp "$tmpfile" "$full" >/dev/null 2>&1; then
-    say "❌ Upload failed. Check credentials/permissions for user '$SERVICE_USER'."
-    rm -f "$tmpfile"; return 1
+detect_region_from_error() {
+  # Parse "The authorization header is malformed; the region 'us-east-1' is wrong; expecting 'eu-west-1'"
+  grep -oE "expecting '[a-z0-9-]+'" | head -n1 | tr -d "'" | awk '{print $2}'
+}
+
+test_upload() {
+  local bucket="${S3_BUCKET#s3://}"; bucket="${bucket%%/*}"
+  local tsf="$(date +%Y%m%d_%H%M%S)"
+  local tmpfile; tmpfile="$(mktemp /tmp/cdn_auto_cfgtest.XXXXXX)"
+  local key="${S3_SUBFOLDER:+$S3_SUBFOLDER/}RACHEL/_config_test_${tsf}.txt"
+  printf "cdn-auto test %s\n" "$tsf" > "$tmpfile"
+
+  say "▶ Test upload (regionless) → s3://$bucket/${key}"
+  local out; out="$(try_put "$bucket" "$key" "$tmpfile" "" "")"; local rc=$?
+  if (( rc == 0 )); then
+    rm -f "$tmpfile"; say "✅ Test upload succeeded without specifying a region."; return 0
   fi
+
+  # Check if error hints a region
+  local expect_reg=""; expect_reg="$(printf '%s' "$out" | detect_region_from_error || true)"
+  if [[ -n "$expect_reg" ]]; then
+    say "↻ Retrying with detected region: $expect_reg"
+    out="$(try_put "$bucket" "$key" "$tmpfile" "$expect_reg" "")"; rc=$?
+    if (( rc == 0 )); then rm -f "$tmpfile"; say "✅ Test upload succeeded with region=$expect_reg."; return 0; fi
+  fi
+
+  # Retry with SSE-S3 (common bucket policy requirement)
+  say "↻ Retrying with SSE-S3 (AES256)."
+  out="$(try_put "$bucket" "$key" "$tmpfile" "${expect_reg:-}" "AES256")"; rc=$?
   rm -f "$tmpfile"
-  aws_su --region "$REG" s3api head-object --bucket "$bucket_name" --key "${S3_SUBFOLDER:+$S3_SUBFOLDER/}${key_path}" >/dev/null 2>&1 \
-    && say "✅ Test upload verified." || say "⚠️ Upload succeeded; verification denied (policy may not allow GetObject)."
-  return 0
+  if (( rc == 0 )); then say "✅ Test upload succeeded with SSE-S3 (AES256)."; return 0; fi
+
+  # Final failure: print exact AWS error
+  say "❌ Upload failed. AWS said:"
+  echo "$out" | sed 's/^/   /'
+  # Suggest likely causes
+  if echo "$out" | grep -qi 'AccessDenied'; then
+    say "HINT: AccessDenied usually means bucket policy is blocking PutObject to this prefix or requires specific encryption (e.g., KMS)."
+    say "      Try a permitted prefix (e.g., the 's/' you used earlier) or update bucket policy. Using an unknown new prefix is fine for S3,"
+    say "      but only if the policy allows it."
+  fi
+  return 1
 }
 
 attempt=1; max_attempts=3
