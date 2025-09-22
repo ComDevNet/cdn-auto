@@ -1,15 +1,13 @@
 #!/bin/bash
-# cdn-auto configure (defaults-first): use AWS CLI defaults; only prompt to set if missing
+# cdn-auto configure (defaults-first, improved subfolder discovery)
 set -euo pipefail
 
-# --- Locate project root ---
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CONFIG_DIR="$PROJECT_ROOT/config"
 CONFIG_FILE="$CONFIG_DIR/automation.conf"
 mkdir -p "$CONFIG_DIR"
 
-# --- Detect service user for owning the config and running AWS ---
 SERVICE_UNIT="/etc/systemd/system/v5-log-processor.service"
 SERVICE_USER="$(awk -F= '/^User=/{print $2}' "$SERVICE_UNIT" 2>/dev/null | tail -n1)"
 if [[ -z "${SERVICE_USER:-}" ]]; then SERVICE_USER="${SUDO_USER:-pi}"; fi
@@ -62,12 +60,10 @@ menu_select_cancelable() {
   fi
 }
 
-# --- Validation ---
 validate_device_location() { [[ "$1" =~ ^[A-Za-z0-9_-]{2,64}$ ]]; }
 validate_bucket_url() { [[ "$1" =~ ^s3://[a-z0-9\.\-]{3,63}(/.*)?$ ]]; }
 sanitize_subfolder() { local sf="${1#/}"; sf="${sf%/}"; echo "$sf"; }
 
-# --- AWS helpers (ALWAYS use defaults; never inject profile/region) ---
 aws_su() {
   if [[ -n "${SUDO_USER:-}" && "$SERVICE_USER" != "$USER" ]]; then
     sudo -u "$SERVICE_USER" aws "$@"
@@ -84,39 +80,18 @@ check_network() {
 }
 
 check_aws_identity() {
-  # Use defaults set for SERVICE_USER; do not pass env. If region missing, AWS CLI errors; we catch and offer to configure.
   local out rc
   out="$(aws_su sts get-caller-identity --output text 2>&1)"; rc=$?
-  if (( rc == 0 )); then
-    say "✅ AWS identity: $(echo "$out" | awk '{print $1, $2, $3}' 2>/dev/null || echo "$out")"
-    return 0
-  fi
-  # Certain common cases: no region, no credentials, expired
+  (( rc == 0 )) && { say "✅ AWS identity OK for '$SERVICE_USER'."; return 0; }
   if echo "$out" | grep -qi 'You must specify a region'; then
-    say "⚠️  AWS default region not set for user '$SERVICE_USER'."
-    if confirm "Run 'aws configure' for user '$SERVICE_USER' now?"; then
+    say "⚠️  AWS default region not set for '$SERVICE_USER'."
+    if confirm "Run 'aws configure' for '$SERVICE_USER' now?"; then
       if [[ -n "${SUDO_USER:-}" && "$SERVICE_USER" != "$USER" ]]; then sudo -u "$SERVICE_USER" aws configure || true; else aws configure || true; fi
       out="$(aws_su sts get-caller-identity --output text 2>&1)"; rc=$?
       (( rc == 0 )) && { say "✅ AWS identity OK after configure."; return 0; }
     fi
-    say "❌ AWS identity check failed (region unset)."; return 1
   fi
-  if echo "$out" | grep -qiE 'Unable to locate credentials|NoCredentialProviders|InvalidClientTokenId|SignatureDoesNotMatch'; then
-    say "⚠️  AWS credentials not available/valid for '$SERVICE_USER'."
-    if confirm "Run 'aws configure' for user '$SERVICE_USER' now?"; then
-      if [[ -n "${SUDO_USER:-}" && "$SERVICE_USER" != "$USER" ]]; then sudo -u "$SERVICE_USER" aws configure || true; else aws configure || true; fi
-      out="$(aws_su sts get-caller-identity --output text 2>&1)"; rc=$?
-      (( rc == 0 )) && { say "✅ AWS identity OK after configure."; return 0; }
-    fi
-    say "❌ AWS identity check failed (credentials)."; return 1
-  fi
-  # Unknown error; show a brief message and allow continue or exit
-  local msg="AWS identity check returned an error for user '$SERVICE_USER':\n$out\n\nChoose **Exit** to stop now, or **Continue** to proceed (you can input bucket manually)."
-  if have_whiptail; then
-    whiptail --title "AWS identity check failed" --yes-button "Exit" --no-button "Continue" --yesno "$msg" 18 74 && exit 2
-  else
-    echo -e "$msg"; read -rp "Exit now? [Y/n]: " yn; [[ "${yn,,}" != "n" ]] && exit 2
-  fi
+  say "⚠️  AWS identity not confirmed for '$SERVICE_USER'. You can still continue and enter paths manually."
   return 1
 }
 
@@ -125,7 +100,6 @@ ensure_preflight_ok() {
   check_network && net_ok=1 || net_ok=0
   check_aws_identity && id_ok=1 || id_ok=0
   if (( net_ok==1 && id_ok==1 )); then return 0; fi
-  # If either failed, we still allow continuing (manual bucket entry later), but we warn first.
   local msg=""
   (( net_ok==0 )) && msg+="• Network to s3.amazonaws.com unreachable.\n"
   (( id_ok==0 )) && msg+="• AWS identity not confirmed for '$SERVICE_USER'.\n"
@@ -137,13 +111,9 @@ ensure_preflight_ok() {
   fi
 }
 
-# --- Load existing config if present ---
-if [[ -f "$CONFIG_FILE" ]]; then
-  # shellcheck disable=SC1090
-  source "$CONFIG_FILE" || true
-fi
+# Load existing config if present
+if [[ -f "$CONFIG_FILE" ]]; then source "$CONFIG_FILE" || true; fi
 
-# Defaults (only our pipeline settings; no AWS env keys here)
 SERVER_VERSION="${SERVER_VERSION:-v2}"
 DEVICE_LOCATION="${DEVICE_LOCATION:-device}"
 PYTHON_SCRIPT="${PYTHON_SCRIPT:-oc4d}"
@@ -152,10 +122,7 @@ S3_SUBFOLDER="${S3_SUBFOLDER:-}"
 SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
 
-# --- Run preflight ---
 ensure_preflight_ok || true
-
-# --- Guided prompts (unchanged from earlier, minus AWS prompts) ---
 
 sel=$(menu_select "Select server version" 15 74 5 \
   v4 "Server v4 (Apache / access.log*)" \
@@ -177,7 +144,7 @@ while :; do
   validate_device_location "$DEVICE_LOCATION" && break || say "Invalid location. Use 2-64 chars: [A-Za-z0-9_-]"
 done
 
-# Bucket discovery using defaults for SERVICE_USER; show Exit on error
+# Bucket discovery (defaults only)
 pick_bucket() {
   local out rc err="" opts=()
   out="$(aws_capture s3 ls 2>&1)"; rc=$?
@@ -192,7 +159,7 @@ pick_bucket() {
     while :; do
       prompt_text "S3 bucket (e.g., s3://my-bucket)" "${S3_BUCKET}" S3_BUCKET
       S3_BUCKET="${S3_BUCKET%/}"
-      validate_bucket_url "$S3_BUCKET" && break || say "Bucket must start with s3://"
+      [[ "$S3_BUCKET" =~ ^s3:// ]] && break || say "Bucket must start with s3://"
     done
     return 0
   fi
@@ -208,7 +175,7 @@ pick_bucket() {
     while :; do
       prompt_text "S3 bucket (e.g., s3://my-bucket)" "${S3_BUCKET}" S3_BUCKET
       S3_BUCKET="${S3_BUCKET%/}"
-      validate_bucket_url "$S3_BUCKET" && break || say "Bucket must start with s3://"
+      [[ "$S3_BUCKET" =~ ^s3:// ]] && break || say "Bucket must start with s3://"
     done
   else
     S3_BUCKET="s3://$choice"
@@ -216,32 +183,38 @@ pick_bucket() {
 }
 pick_bucket
 
+# Improved subfolder discovery: s3api list-objects-v2 --delimiter '/'; fallback to 'aws s3 ls' PRE parsing
 pick_subfolder() {
   local bucket_name="${S3_BUCKET#s3://}"; bucket_name="${bucket_name%%/*}"
-  local out="" rc=0 err="" subs=() opts=()
-  out="$(aws_capture s3 ls "s3://$bucket_name/" 2>&1)"; rc=$?
-  if (( rc != 0 )); then err="$out"; out=""; fi
-  opts+=( "NONE" "<bucket root>" )
-  if [[ -n "$out" ]]; then
-    while IFS= read -r line; do
-      if [[ "$line" == PRE* ]]; then subs+=( "$(echo "$line" | awk '{print $2}' | sed 's:/$::')" ); fi
+  local opts=( "NONE" "<bucket root>" "CUSTOM" "Enter subfolder manually" )
+  local added=0
+
+  # Try s3api with delimiter to get first-level prefixes
+  local prefixes rc out
+  out="$(aws_capture s3api list-objects-v2 --bucket "$bucket_name" --delimiter '/' --query 'CommonPrefixes[].Prefix' --output text 2>&1)"; rc=$?
+  if (( rc == 0 )); then
+    while IFS=$'\t' read -r p; do
+      p="${p%/}"
+      [[ -n "$p" ]] && { opts+=( "$p" "$p" ); added=$((added+1)); }
     done <<< "$out"
-    for s in "${subs[@]}"; do opts+=( "$s" "$s" ); done
   else
-    if [[ -n "$err" ]]; then
-      local msg="Could not list prefixes in s3://$bucket_name/.\n\nError:\n${err:-<no details>}\n\nSelect **Exit** to stop now, or **Manual** to type a subfolder."
-      if have_whiptail; then
-        if whiptail --title "Subfolder discovery failed" --yes-button "Exit" --no-button "Manual" --yesno "$msg" 18 74; then exit 2; fi
-      else
-        echo -e "$msg"; read -rp "Exit? [Y/n]: " yn; [[ "${yn,,}" != "n" ]] && exit 2
-      fi
+    # Fallback to 'aws s3 ls' parsing (PRE lines)
+    out="$(aws_capture s3 ls "s3://$bucket_name/" 2>&1)"; rc=$?
+    if (( rc == 0 )); then
+      while IFS= read -r line; do
+        if [[ "$line" == PRE* ]]; then
+          p="$(echo "$line" | awk '{print $2}' | sed 's:/$::')"
+          [[ -n "$p" ]] && { opts+=( "$p" "$p" ); added=$((added+1)); }
+        fi
+      done <<< "$out"
     fi
-    opts+=( "CUSTOM" "Enter subfolder manually" )
   fi
 
+  # If nothing discovered, the menu still shows <root> and CUSTOM so user isn't stuck
   local choice
   choice="$(menu_select_cancelable "Select S3 subfolder in s3://$bucket_name/" 20 74 12 "${opts[@]}")"
   [[ "$choice" == "__EXIT__" ]] && exit 2
+
   case "$choice" in
     NONE) S3_SUBFOLDER="" ;;
     CUSTOM)
@@ -254,7 +227,6 @@ pick_subfolder() {
 pick_subfolder
 S3_SUBFOLDER="$(sanitize_subfolder "$S3_SUBFOLDER")"
 
-# Schedule
 sched=$(menu_select "Choose schedule" 15 74 7 \
   hourly "Every hour" \
   daily  "Once per day" \
@@ -273,7 +245,6 @@ case "$sched" in
     ;;
 esac
 
-# Summary
 summary=$(cat <<EOF
 Service user   : $SERVICE_USER
 Server version : $SERVER_VERSION
@@ -288,7 +259,6 @@ EOF
 if have_whiptail; then whiptail --title "Confirm configuration" --msgbox "$summary" 19 74; else echo; echo "$summary"; echo; fi
 if ! confirm "Save configuration?"; then echo "Aborted."; exit 1; fi
 
-# Save (no AWS_* keys)
 umask 077
 tmp="${CONFIG_FILE}.tmp"
 cat > "$tmp" <<EOF
@@ -306,7 +276,6 @@ sudo chown "${SERVICE_USER}:${SERVICE_GROUP}" "$CONFIG_FILE"
 sudo chmod 600 "$CONFIG_FILE"
 say "💾 Saved: $CONFIG_FILE (owner: $SERVICE_USER)"
 
-# Live test upload (using defaults only)
 test_upload() {
   if ! have aws; then say "❌ AWS CLI not installed."; return 1; fi
   local tsf tmpfile s3url key_path bucket_name key_key
@@ -330,7 +299,6 @@ EOD
     rm -f "$tmpfile"; return 1
   fi
   rm -f "$tmpfile"
-  # Verify if allowed (optional)
   aws_su s3api head-object --bucket "$bucket_name" --key "${S3_SUBFOLDER:+$S3_SUBFOLDER/}${key_path}" >/dev/null 2>&1 \
     && say "✅ Test upload verified." || say "⚠️ Upload succeeded; verification denied (policy may not allow GetObject)."
   return 0
@@ -346,7 +314,6 @@ until test_upload; do
   attempt=$((attempt+1))
 done
 
-# Timer enable/update
 SERVICE="v5-log-processor.service"
 TIMER="v5-log-processor.timer"
 DROP_DIR="/etc/systemd/system/${TIMER}.d"
