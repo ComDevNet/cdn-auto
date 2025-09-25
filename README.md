@@ -41,3 +41,11 @@ chmod +x install.sh
 - [x] Add wifi Password
 - [x] Upload Data to Server
 - [x] Troubleshoot System
+
+---
+
+## ⚙️ Automation
+
+This project includes a powerful automation module for scheduling the entire log processing pipeline. It can be installed as a systemd service to run automatically, even when no user is logged in.
+
+**[For full details, see the Automation Module Documentation](./scripts/data/automation/README.md)**

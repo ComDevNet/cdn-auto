@@ -1,6 +1,6 @@
 #!/bin/bash
 
-s3_bucket="s3://upload-test"
+s3_bucket="s3://rachel-upload-test"
 
 # Terminal colors
 RED='\033[0;31m'

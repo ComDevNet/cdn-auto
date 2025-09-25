@@ -45,6 +45,7 @@ sudo chmod +x scripts/data/collection/*.sh
 sudo chmod +x scripts/data/process/*.sh
 sudo chmod +x scripts/data/upload/*.sh
 sudo chmod +x scripts/troubleshoot/*.sh
+sudo chmod +x scripts/data/automation/*.sh
 
 # install python3 and pip3
 pip3 install -r requirements.txt --break-system-packages
