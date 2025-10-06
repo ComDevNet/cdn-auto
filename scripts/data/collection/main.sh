@@ -1,56 +1,56 @@
 #!/bin/bash
 
-# clear the screen
 clear
-
-echo ""
-echo ""
-
-# Display the name of the tool
-figlet -t -f 3d "COLLECTION" | lolcat
-
-echo ""
-
-# A border to cover the description and its centered
-echo  "====================================================="
-echo "Collect your server logs with ease"
-echo "====================================================="
-
+echo "=============================================================="
+echo "  Select the log type you want to collect"
+echo "=============================================================="
 echo ""
 
 # variables
 RED='\033[0;31m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 GREEN='\033[0;32m'
-DARK_GRAY='\033[1;30m'
 
-# Display menu options
-echo -e "1. Start                  ${DARK_GRAY}-| Start Collection process${NC}"
-echo -e "2. Data Processing        ${DARK_GRAY}-| Run processing script${NC}"
-echo -e "${GREEN}3. Go Back                ${DARK_GRAY}-| Go back to the main menu${NC}"
-echo -e "${RED}4. Exit                   ${DARK_GRAY}-| Exit the program${NC}"
+echo "1. v4 Logs (Apache)"
+echo "2. v5 Logs (OC4D / Castle)"
+echo "3. D-Hub Logs"
+echo -e "${GREEN}4. Go Back${NC}"
 
-echo -e "${NC}"
-# Prompt the user for input
+echo ""
 read -p "Choose an option (1-4): " choice
 
-# Check the user's choice and execute the corresponding script
+DEVICE_LOCATION="manual_collection"
+TODAY_YMD=$(date '+%Y_%m_%d')
+NEW_FOLDER="${DEVICE_LOCATION}_logs_${TODAY_YMD}"
+COLLECT_DIR="00_DATA/$NEW_FOLDER"
+mkdir -p "$COLLECT_DIR"
+
 case $choice in
     1)
-        ./scripts/data/collection/all.sh
-        ;;
+        LOG_DIR="/var/log/apache2"
+        echo "Collecting v4 Apache logs from $LOG_DIR..."
+        find "$LOG_DIR" -type f -name 'access.log*' -exec cp -v {} "$COLLECT_DIR"/ \;
+        ;; 
     2)
-        ./scripts/data/process/main.sh
+        LOG_DIR="/var/log/oc4d"
+        echo "Collecting v5 OC4D/Castle logs from $LOG_DIR..."
+        find "$LOG_DIR" -type f \( -name 'oc4d-*.log' -o -name 'capecoastcastle-*.log' \) ! -name '*-exceptions-*' -exec cp -v {} "$COLLECT_DIR"/ \;
         ;;
     3)
-        ./scripts/data/main.sh
+        LOG_DIR="/var/log/dhub"
+        echo "Collecting D-Hub logs from $LOG_DIR..."
+        find "$LOG_DIR" -type f \( -name 'oc4d-*.log' ! -name 'oc4d-exceptions-*' \) -exec cp -v {} "$COLLECT_DIR"/ \;
         ;;
     4)
-        ./exit.sh
+        exec ./scripts/data/main.sh
         ;;
     *)
-        echo -e "${RED}Invalid choice. Please choose a number between 1 and 6.${NC}"
+        echo -e "${RED}Invalid choice.${NC}"
         sleep 1.5
-        exec ./scripts/data/collection/main.sh
+        exec "$0"
         ;;
 esac
+
+echo -e "\n${GREEN}Log collection complete. Files are in: $COLLECT_DIR${NC}"
+read -p "Press Enter to return to the menu..."
+exec ./scripts/data/main.sh

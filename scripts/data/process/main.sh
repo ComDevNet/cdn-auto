@@ -1,60 +1,50 @@
 #!/bin/bash
 
-# clear the screen
 clear
-
-echo ""
-echo ""
-
-# Display the name of the tool
-figlet -t -f 3d "PROCESSING" | lolcat
-
+echo "=============================================================="
+echo "  Select a folder to process"
+echo "=============================================================="
 echo ""
 
-# A border to cover the description and its centered
-echo  "=================================================================================="
-echo "Process your data with ease, Make Sure you've already run the Collection Scripts"
-echo "=================================================================================="
+mapfile -t folders < <(find 00_DATA -mindepth 1 -maxdepth 1 -type d -name "*_logs_*" | sort -r)
+
+if [ ${#folders[@]} -eq 0 ]; then
+    echo "No collected log folders found in 00_DATA/."
+    read -p "Press Enter to return..."
+    exec ./scripts/data/main.sh
+fi
+
+PS3="Please enter the number of the folder to process: "
+select FOLDER_PATH in "${folders[@]}"; do
+    if [ -n "$FOLDER_PATH" ]; then
+        FOLDER_NAME=$(basename "$FOLDER_PATH")
+        echo "You selected folder: $FOLDER_NAME"
+        break
+    else
+        echo "Invalid selection. Try again."
+    fi
+done
 
 echo ""
+echo "=============================================================="
+echo "  Select the correct processor for these logs"
+echo "=============================================================="
+echo ""
 
-# variables
-RED='\033[0;31m'
-NC='\033[0m' # No Color
-GREEN='\033[0;32m'
-DARK_GRAY='\033[1;30m'
+PS3="Please enter the number of the processor to use: "
+select PROCESSOR_CHOICE in "v4 (log.py)" "v5-OC4D (logv2.py)" "v5-Castle (castle.py)" "D-Hub (dhub.py)"; do
+    case $PROCESSOR_CHOICE in
+        "v4 (log.py)") PROCESSOR="scripts/data/process/processors/log.py"; break ;;
+        "v5-OC4D (logv2.py)") PROCESSOR="scripts/data/process/processors/logv2.py"; break ;;
+        "v5-Castle (castle.py)") PROCESSOR="scripts/data/process/processors/castle.py"; break ;;
+        "D-Hub (dhub.py)") PROCESSOR="scripts/data/process/processors/dhub.py"; break ;;
+        *) echo "Invalid selection. Please try again." ;;
+    esac
+done
 
-# Display menu options
-echo -e "1. Start               ${DARK_GRAY}-| Process all your data${NC}"
-echo -e "2. Data Collection     ${DARK_GRAY}-| Run the Data Collection Scripts${NC}"
-echo -e "3. Data Upload         ${DARK_GRAY}-| Run the Data Upload Scripts${NC}"
-echo -e "${GREEN}4. Go Back             ${DARK_GRAY}-| Go back to the main menu${NC}"
-echo -e "${RED}5. Exit                ${DARK_GRAY}-| Exit the program${NC}"
+echo "Running processor: $PROCESSOR on folder: $FOLDER_NAME"
+python3 "$PROCESSOR" "$FOLDER_NAME"
 
-echo -e "${NC}"
-# Prompt the user for input
-read -p "Choose an option (1-5): " choice
-
-# Check the user's choice and execute the corresponding script
-case $choice in
-    1)
-        ./scripts/data/process/logs.sh
-        ;;
-    2)
-        ./scripts/data/collection/main.sh
-        ;;
-    3)
-        ./scripts/data/upload/main.sh
-        ;;
-    4)
-        ./scripts/data/main.sh
-        ;;
-    5)
-        ./exit.sh
-        ;;
-    *)
-        echo -e "${RED}Invalid choice. Please choose a number between 1 and 7.${NC}"
-        sleep 1.5
-        exec ./scripts/data/process/main.sh
-        ;;
-esac
+echo -e "\nProcessing complete."
+read -p "Press Enter to return to the menu..."
+exec ./scripts/data/main.sh
