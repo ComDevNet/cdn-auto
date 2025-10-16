@@ -4,6 +4,7 @@ import os
 import re
 import json
 import csv
+import sys
 from datetime import datetime
 
 # This regex is the key change. It's designed to capture the new d-hub URL format.

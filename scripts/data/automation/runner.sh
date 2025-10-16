@@ -99,7 +99,6 @@ v2|server\ v5|v5)
         find "$log_dir" -type f \( \
         \( -name 'oc4d-*.log' ! -name 'oc4d-exceptions-*.log' \) -o \
         \( -name 'capecoastcastle-*.log' ! -name 'capecoastcastle-exceptions-*.log' \) -o \
-        \( -name 'dhub-*.log' ! -name 'dhub-exceptions-*.log' \) -o \
         -name '*.gz' \) -exec cp -n {} "$COLLECT_DIR"/ \;
     fi
   done
