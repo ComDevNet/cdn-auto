@@ -90,13 +90,19 @@ case "$SERVER_VERSION" in
     LOG_DIR="/var/log/apache2"
     find "$LOG_DIR" -type f -name 'access.log*' -exec cp -n {} "$COLLECT_DIR"/ \;
     ;;
-  v2|server\ v5|v5)
-    LOG_DIR="/var/log/oc4d"
-    find "$LOG_DIR" -type f \( \
-       \( -name 'oc4d-*.log' ! -name 'oc4d-exceptions-*.log' \) -o \
-       \( -name 'capecoastcastle-*.log' ! -name 'capecoastcastle-exceptions-*.log' \) -o \
-       -name '*.gz' \) -exec cp -n {} "$COLLECT_DIR"/ \;
-    ;;
+
+v2|server\ v5|v5)
+  # Search in both oc4d and dhub directories
+  LOG_DIRS=("/var/log/oc4d" "/var/log/dhub")
+  for log_dir in "${LOG_DIRS[@]}"; do
+    if [ -d "$log_dir" ]; then
+        find "$log_dir" -type f \( \
+        \( -name 'oc4d-*.log' ! -name 'oc4d-exceptions-*.log' \) -o \
+        \( -name 'capecoastcastle-*.log' ! -name 'capecoastcastle-exceptions-*.log' \) -o \
+        -name '*.gz' \) -exec cp -n {} "$COLLECT_DIR"/ \;
+    fi
+  done
+  ;;
   *) log "❌ Unknown SERVER_VERSION '$SERVER_VERSION'"; exit 1;;
 esac
 shopt -s nullglob
@@ -107,11 +113,12 @@ PROCESSOR=""
 case "$SERVER_VERSION" in
   v1|v4) PROCESSOR="scripts/data/process/processors/log.py" ;;
   v2|v5|server\ v5)
-    case "$PYTHON_SCRIPT" in
-      oc4d) PROCESSOR="scripts/data/process/processors/logv2.py" ;;
-      cape_coast_d) PROCESSOR="scripts/data/process/processors/castle.py" ;;
-      *) PROCESSOR="scripts/data/process/processors/logv2.py" ;;
-    esac
+case "$PYTHON_SCRIPT" in
+  oc4d) PROCESSOR="scripts/data/process/processors/logv2.py" ;;
+  cape_coast_d) PROCESSOR="scripts/data/process/processors/castle.py" ;;
+  dhub) PROCESSOR="scripts/data/process/processors/dhub.py" ;; # <-- New d-hub option
+  *) PROCESSOR="scripts/data/process/processors/logv2.py" ;;
+esac
     ;;
 esac
 log "🐍 Process → $PROCESSOR  (folder=$NEW_FOLDER)"

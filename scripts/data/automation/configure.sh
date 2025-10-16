@@ -115,8 +115,9 @@ sel=$(menu_select "Select server version" 15 74 5 \
 
 if [[ "$SERVER_VERSION" == "v2" ]]; then
   PYTHON_SCRIPT=$(menu_select "Select logs flavor (v2)" 12 74 5 \
-    oc4d "OC4D logs (logv2.py)" \
-    cape_coast_d "Cape Coast Castle logs (castle.py)" \
+oc4d "OC4D logs (logv2.py)" \
+cape_coast_d "Cape Coast Castle logs (castle.py)" \
+dhub "D-Hub logs (dhub.py)" \
   )
 else
   PYTHON_SCRIPT="oc4d"
