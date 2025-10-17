@@ -248,7 +248,10 @@ test_upload(){
     chown "$SERVICE_USER:$SERVICE_GROUP" "$tmpfile" 2>/dev/null || true
     chmod 600 "$tmpfile" 2>/dev/null || true
   fi
-  trap 'rm -f "$tmpfile" 2>/dev/null || true' RETURN EXIT
+  # When the function returns, remove the temp file AND unset the script-wide EXIT trap.
+  trap 'rm -f "$tmpfile" 2>/dev/null; trap - EXIT' RETURN
+  # If the script exits unexpectedly while this function is running, clean up the temp file.
+  trap 'rm -f "$tmpfile" 2>/dev/null' EXIT
 
   say "▶ Test upload → s3://$bucket/$key"
   if aws_su s3api put-object --bucket "$bucket" --key "$key" --body "$tmpfile" >/dev/null 2>&1; then
@@ -298,3 +301,4 @@ sudo systemctl enable "$TIMER" >/dev/null
 sudo systemctl restart "$TIMER"
 say "⏱  Timer updated and started: $TIMER"
 say "✅ Configuration complete."
+
