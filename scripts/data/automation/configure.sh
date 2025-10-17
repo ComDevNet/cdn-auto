@@ -122,6 +122,13 @@ else
   PYTHON_SCRIPT="oc4d"
 fi
 
+# If user selected a non-castle log type, and hourly was previously configured,
+# gracefully downgrade to daily to prevent an invalid configuration.
+if [[ "$PYTHON_SCRIPT" != "cape_coast_d" && "$SCHEDULE_TYPE" == "hourly" ]]; then
+  say "⚠️ Hourly schedule is only for Cape Coast Castle logs. Downgrading to daily."
+  SCHEDULE_TYPE="daily"
+fi
+
 while :; do
   prompt_text "Device location (letters/numbers/_/-)" "${DEVICE_LOCATION}" DEVICE_LOCATION
   validate_device_location "$DEVICE_LOCATION" && break || say "Invalid location. Use 2-64 chars: [A-Za-z0-9_-]"
@@ -185,13 +192,19 @@ pick_subfolder(){
 pick_subfolder
 S3_SUBFOLDER="$(sanitize_subfolder "$S3_SUBFOLDER")"
 
-sched=$(menu_select "Choose schedule" 15 74 7 \
-  hourly "Every hour" \
-  daily  "Once per day" \
-  weekly "Once per week" \
-  monthly "Once per month" \
-  custom "Custom interval (seconds)" \
+# --- Dynamic Schedule Menu ---
+sched_opts=(
+  daily   "Once per day"
+  weekly  "Once per week"
+  monthly "Once per month"
+  custom  "Custom interval (seconds)"
 )
+# If castle is selected, add hourly to the beginning of the options
+if [[ "$PYTHON_SCRIPT" == "cape_coast_d" ]]; then
+  sched_opts=( hourly "Every hour" "${sched_opts[@]}" )
+fi
+sched=$(menu_select "Choose schedule" 15 74 7 "${sched_opts[@]}")
+
 case "$sched" in
   hourly) SCHEDULE_TYPE="hourly"; RUN_INTERVAL="3600" ;;
   daily)  SCHEDULE_TYPE="daily";  RUN_INTERVAL="86400" ;;
