@@ -33,6 +33,7 @@ DEVICE_LOCATION="${DEVICE_LOCATION:-device}"
 PYTHON_SCRIPT="${PYTHON_SCRIPT:-oc4d}"
 S3_BUCKET="${S3_BUCKET:-s3://example-bucket}"
 S3_SUBFOLDER="${S3_SUBFOLDER:-}"
+SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}" # Default to daily if not set
 
 DATA_DIR="$PROJECT_ROOT/00_DATA"
 PROCESSED_ROOT="$DATA_DIR/00_PROCESSED"
@@ -121,15 +122,45 @@ PROCESSED_DIR="$PROCESSED_ROOT/$NEW_FOLDER"
 SUMMARY="$PROCESSED_DIR/summary.csv"
 if [[ ! -s "$SUMMARY" ]]; then log "❌ Missing or empty summary at $SUMMARY"; exit 1; fi
 
-MONTH="$(echo "$NEW_FOLDER" | awk -F'_' '{print $(NF-1)}' || true)"
-if ! [[ "$MONTH" =~ ^[0-9]{2}$ ]]; then MONTH="$(date +%m)"; fi
-log "🧮 Filter month=$MONTH → final CSV"
-python3 scripts/data/upload/process_csv.py "$PROCESSED_DIR" "$DEVICE_LOCATION" "$MONTH" "summary.csv"
+log "🧮 Filtering results based on schedule: $SCHEDULE_TYPE"
+case "$SCHEDULE_TYPE" in
+  hourly|daily|weekly)
+    # Use the new time-based filtering script
+    python3 scripts/data/automation/filter_time_based.py "$PROCESSED_DIR" "$DEVICE_LOCATION" "$SCHEDULE_TYPE" "summary.csv"
+    ;;
+  monthly)
+    # Use the existing script for monthly processing, get current month
+    MONTH="$(date +%m)"
+    log "Filter month=$MONTH → final CSV"
+    python3 scripts/data/upload/process_csv.py "$PROCESSED_DIR" "$DEVICE_LOCATION" "$MONTH" "summary.csv"
+    ;;
+  *)
+    log "⚠️  Unknown or custom schedule type '$SCHEDULE_TYPE'. Using default daily filter."
+    python3 scripts/data/automation/filter_time_based.py "$PROCESSED_DIR" "$DEVICE_LOCATION" "daily" "summary.csv"
+    ;;
+esac
 
+log "🔎 Searching for final processed CSV..."
 shopt -s nullglob
-FINAL_CAND=( "$PROCESSED_DIR/${DEVICE_LOCATION}_${MONTH}_"*"_access_logs.csv" )
+# Search for any of the possible new naming conventions but exclude known intermediate files.
+# This glob is broad but will be filtered.
+ALL_FILES=( "$PROCESSED_DIR/${DEVICE_LOCATION}_"*.csv )
 shopt -u nullglob
-if [[ ${#FINAL_CAND[@]} -eq 0 ]]; then log "❌ Could not locate final CSV after filtering."; exit 1; fi
+
+FINAL_CAND=()
+for f in "${ALL_FILES[@]}"; do
+  # Add files that do NOT match the intermediate/source file names.
+  if [[ "$(basename "$f")" != "summary.csv" ]]; then
+    FINAL_CAND+=("$f")
+  fi
+done
+
+if [[ ${#FINAL_CAND[@]} -eq 0 ]]; then
+  log "✅ Run finished. No new data was found for the current period, so no file was generated."
+  exit 0
+fi
+
+# We expect only one file to be created per run.
 FINAL_CSV="${FINAL_CAND[0]}"
 log "📦 Final CSV: $(basename "$FINAL_CSV")"
 
