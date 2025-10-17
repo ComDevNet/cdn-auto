@@ -4,8 +4,17 @@
 clear
 echo -e "\n\n"
 
+# Function to safely pipe to lolcat if it exists, otherwise just cat
+pipe_lolcat() {
+  if command -v lolcat >/dev/null 2>&1; then
+    lolcat
+  else
+    cat
+  fi
+}
+
 # Display the name of the tool using figlet and lolcat
-figlet -t -f 3d "AUTOMATION" | lolcat
+figlet -t -f 3d "AUTOMATION" | pipe_lolcat
 echo ""
 
 # Centered border with description
