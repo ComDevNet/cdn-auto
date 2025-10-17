@@ -9,12 +9,14 @@ def process_time_based_csv(folder, location, schedule_type):
     """
     Filters a summary.csv file based on a specified time interval (hourly, daily, weekly)
     and renames the output file according to the specified naming convention.
+    Prints the final filename to stdout on success.
     """
     input_path = os.path.join(folder, "summary.csv")
     temp_output_path = os.path.join(folder, "temp_filtered.csv")
     
     if not os.path.exists(input_path):
-        print(f"Error: summary.csv not found in {folder}")
+        # Do not print error to stdout, as it would be captured by the shell script
+        sys.stderr.write(f"Error: summary.csv not found in {folder}\n")
         sys.exit(1)
 
     now = datetime.now()
@@ -31,11 +33,10 @@ def process_time_based_csv(folder, location, schedule_type):
     elif schedule_type == "weekly":
         start_of_week = now - timedelta(days=now.weekday())
         start_time = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
-        # WW format: Week number of the year
         file_timestamp = now.strftime("%W_%m_%Y")
         output_filename = f"{location}_{file_timestamp}.csv"
     else:
-        print(f"Error: Invalid schedule type '{schedule_type}' provided.")
+        sys.stderr.write(f"Error: Invalid schedule type '{schedule_type}' provided.\n")
         sys.exit(1)
 
     final_output_path = os.path.join(folder, output_filename)
@@ -52,41 +53,36 @@ def process_time_based_csv(folder, location, schedule_type):
                 header = next(reader)
                 writer.writerow(header)
             except StopIteration:
-                print("Warning: summary.csv is empty.")
-                sys.exit(0) # Exit gracefully if the input file is empty
+                sys.exit(0) # Exit gracefully if the input file is empty, printing nothing
 
             for row in reader:
                 try:
                     # Expects date in col 2 (index 1) and time in col 3 (index 2)
                     row_date_str = row[1]
                     row_time_str = row[2] 
-                    # Combine date and time string to create a datetime object
                     date_obj = datetime.strptime(f"{row_date_str} {row_time_str}", '%Y-%m-%d %H:%M:%S')
                     
-                    # Check if the log entry's timestamp is within the desired time window
                     if date_obj >= start_time:
                         writer.writerow(row)
                         rows_written += 1
                 except (ValueError, IndexError):
-                    # This will skip rows with missing/malformed dates or times
                     continue
 
     except Exception as e:
-        print(f"An error occurred during CSV processing: {e}")
+        sys.stderr.write(f"An error occurred during CSV processing: {e}\n")
         sys.exit(1)
 
-    # Only create the final file if we actually found new data
     if rows_written > 0:
         os.rename(temp_output_path, final_output_path)
-        print(f"Successfully created {output_filename} with {rows_written} new entries.")
+        # On success, print the final filename to stdout for the calling script
+        print(output_filename)
     else:
-        # If no new data, just clean up the temporary file
         os.remove(temp_output_path)
-        print("No new log entries found for the selected time period.")
+        # Print nothing if no new data was found
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
-        print("Usage: python filter_time_based.py <folder_path> <device_location> <schedule_type>")
+        sys.stderr.write("Usage: python filter_time_based.py <folder_path> <device_location> <schedule_type>\n")
         sys.exit(1)
 
     folder_path = sys.argv[1]

@@ -33,7 +33,7 @@ DEVICE_LOCATION="${DEVICE_LOCATION:-device}"
 PYTHON_SCRIPT="${PYTHON_SCRIPT:-oc4d}"
 S3_BUCKET="${S3_BUCKET:-s3://example-bucket}"
 S3_SUBFOLDER="${S3_SUBFOLDER:-}"
-SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}" # Default to daily if not set
+SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}" # Default schedule if not in config
 
 DATA_DIR="$PROJECT_ROOT/00_DATA"
 PROCESSED_ROOT="$DATA_DIR/00_PROCESSED"
@@ -120,48 +120,43 @@ python3 "$PROCESSOR" "$NEW_FOLDER"
 
 PROCESSED_DIR="$PROCESSED_ROOT/$NEW_FOLDER"
 SUMMARY="$PROCESSED_DIR/summary.csv"
-if [[ ! -s "$SUMMARY" ]]; then log "❌ Missing or empty summary at $SUMMARY"; exit 1; fi
+if [[ ! -s "$SUMMARY" ]]; then log "ℹ️ No new data in summary.csv. Nothing to process."; exit 0; fi
 
-log "🧮 Filtering results based on schedule: $SCHEDULE_TYPE"
+FINAL_CSV="" # This variable will hold the path to the final file
+
+# --- Intelligent Filtering based on configured schedule ---
 case "$SCHEDULE_TYPE" in
   hourly|daily|weekly)
-    # Use the new time-based filtering script
-    python3 scripts/data/automation/filter_time_based.py "$PROCESSED_DIR" "$DEVICE_LOCATION" "$SCHEDULE_TYPE" "summary.csv"
+    log "🧮 Filtering for '$SCHEDULE_TYPE' schedule..."
+    # The python script will print the filename if it creates one.
+    FINAL_CSV_BASENAME=$(python3 "scripts/data/automation/filter_time_based.py" "$PROCESSED_DIR" "$DEVICE_LOCATION" "$SCHEDULE_TYPE")
+    if [[ -n "$FINAL_CSV_BASENAME" ]]; then
+        FINAL_CSV="$PROCESSED_DIR/$FINAL_CSV_BASENAME"
+    fi
     ;;
+
   monthly)
-    # Use the existing script for monthly processing, get current month
+    log "🧮 Filtering for 'monthly' schedule..."
     MONTH="$(date +%m)"
-    log "Filter month=$MONTH → final CSV"
-    python3 scripts/data/upload/process_csv.py "$PROCESSED_DIR" "$DEVICE_LOCATION" "$MONTH" "summary.csv"
+    # The python script will print the filename when called with 'filename' mode.
+    FINAL_CSV_BASENAME=$(python3 scripts/data/upload/process_csv.py "$PROCESSED_DIR" "$DEVICE_LOCATION" "$MONTH" "summary.csv" "filename")
+    if [[ -n "$FINAL_CSV_BASENAME" ]]; then
+        FINAL_CSV="$PROCESSED_DIR/$FINAL_CSV_BASENAME"
+    fi
     ;;
+
   *)
-    log "⚠️  Unknown or custom schedule type '$SCHEDULE_TYPE'. Using default daily filter."
-    python3 scripts/data/automation/filter_time_based.py "$PROCESSED_DIR" "$DEVICE_LOCATION" "daily" "summary.csv"
+    log "❌ Unknown SCHEDULE_TYPE '$SCHEDULE_TYPE' in config. Cannot filter."
+    exit 1
     ;;
 esac
 
-log "🔎 Searching for final processed CSV..."
-shopt -s nullglob
-# Search for any of the possible new naming conventions but exclude known intermediate files.
-# This glob is broad but will be filtered.
-ALL_FILES=( "$PROCESSED_DIR/${DEVICE_LOCATION}_"*.csv )
-shopt -u nullglob
-
-FINAL_CAND=()
-for f in "${ALL_FILES[@]}"; do
-  # Add files that do NOT match the intermediate/source file names.
-  if [[ "$(basename "$f")" != "summary.csv" ]]; then
-    FINAL_CAND+=("$f")
-  fi
-done
-
-if [[ ${#FINAL_CAND[@]} -eq 0 ]]; then
-  log "✅ Run finished. No new data was found for the current period, so no file was generated."
+# Check if a final file was actually created by the filtering process
+if [[ -z "$FINAL_CSV" || ! -f "$FINAL_CSV" ]]; then
+  log "ℹ️ No new entries matched the time period. Run finished."
   exit 0
 fi
 
-# We expect only one file to be created per run.
-FINAL_CSV="${FINAL_CAND[0]}"
 log "📦 Final CSV: $(basename "$FINAL_CSV")"
 
 if has_internet; then
@@ -179,3 +174,4 @@ if has_internet; then
 else
   log "📵 No internet. Queueing new file."; cp -f "$FINAL_CSV" "$QUEUE_DIR/"
 fi
+
