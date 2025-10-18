@@ -1,104 +1,85 @@
-# scripts/data/process/processors/dhub.py
-
-import os
-import re
+#!/usr/bin/env python3
+# This script is modeled on a working processor, as per Llewellyn's feedback.
+import pandas as pd
 import json
-import csv
+import re
 import sys
-from datetime import datetime
+import os
+import glob
+from typing import Dict, List, Optional
 
-# This regex is the key change. It's designed to capture the new d-hub URL format.
-# It looks for lines containing /modules/ followed by a UUID.
+# A precise regex to capture only the relevant parts of a d-hub log message.
+# Pattern looks for: /modules/{uuid}/{module-name}/
 LOG_PATTERN = re.compile(
-    r'(\S+) - - \[([^\]]+)\] "(\S+) /modules/([0-9a-fA-F\-]+)/([^/]+)/?(\S*) HTTP/\d\.\d" (\d+) (\d+) "([^"]*)" "([^"]*)"'
+    r'"GET /(?:uploads/)?modules/(?P<module_id>[0-9a-fA-F-]+)/(?P<module_name>[a-zA-Z0-9_.-]+)/.*" '
+    r'(?P<status_code>\d{3}) (?P<response_size>\d+|-)'
 )
 
-# A simpler pattern for other module requests that might not have a UUID
-FALLBACK_PATTERN = re.compile(
-    r'(\S+) - - \[([^\]]+)\] "(\S+) /modules/([^/]+)/?(\S*) HTTP/\d\.\d" (\d+) (\d+) "([^"]*)" "([^"]*)"'
-)
-
-def parse_log_file(file_path, writer):
-    """Parses a single log file and writes valid entries to the CSV writer."""
+def parse_log_line(line: str) -> Optional[Dict]:
+    """Parses a single JSON log line to extract d-hub access info."""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        log_entry = json.loads(line)
+        message = log_entry.get("message", "")
+        # Extract the IP from the start of the message
+        ip_address = message.split(' ', 1)[0]
+    except (json.JSONDecodeError, AttributeError, IndexError):
+        return None
+
+    match = LOG_PATTERN.search(message)
+    if not match:
+        return None
+
+    data = match.groupdict()
+    data['ip_address'] = ip_address
+    data['response_size'] = 0 if data['response_size'] == '-' else int(data['response_size'])
+    data['status_code'] = int(data['status_code'])
+    # Use the more accurate timestamp from the JSON body
+    data['timestamp'] = log_entry.get("timestamp")
+
+    return data
+
+def main(folder_name: str):
+    """Processes all log files in a given folder and creates a summary.csv."""
+    script_path = os.path.dirname(os.path.realpath(__file__))
+    project_root = os.path.abspath(os.path.join(script_path, "../../../.."))
+
+    input_dir = os.path.join(project_root, "00_DATA", folder_name)
+    output_dir = os.path.join(project_root, "00_DATA", "00_PROCESSED", folder_name)
+
+    if not os.path.isdir(input_dir):
+        print(f"Error: Input directory not found at {input_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    os.makedirs(output_dir, exist_ok=True)
+    output_csv_path = os.path.join(output_dir, "summary.csv")
+
+    all_logs = []
+    log_files = glob.glob(os.path.join(input_dir, '*'))
+    print(f"Found {len(log_files)} files in {input_dir} to process.")
+
+    for file_path in log_files:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             for line in f:
-                try:
-                    # The log lines are JSON objects
-                    log_entry = json.loads(line)
-                    message = log_entry.get("message", "")
+                parsed_data = parse_log_line(line)
+                if parsed_data:
+                    all_logs.append(parsed_data)
 
-                    # We only care about the lines that contain actual request data
-                    if "GET /modules/" not in message and "GET /_next/" not in message:
-                        continue
-
-                    # First, try to match the detailed d-hub pattern with a UUID
-                    match = LOG_PATTERN.search(message)
-                    if match:
-                        (ip, timestamp, method, module_id, module_name, rest_of_path, status, size, referrer, user_agent) = match.groups()
-                        module_viewed = module_name
-                    else:
-                        # If it doesn't match, try the fallback for simpler module URLs
-                        fallback_match = FALLBACK_PATTERN.search(message)
-                        if fallback_match:
-                            (ip, timestamp, method, module_name, rest_of_path, status, size, referrer, user_agent) = fallback_match.groups()
-                            module_viewed = module_name
-                        else:
-                            # If neither pattern matches, skip this line
-                            continue
-
-                    # Format the timestamp
-                    dt_obj = datetime.strptime(timestamp, "%d/%b/%Y:%H:%M:%S %z")
-                    access_date = dt_obj.strftime("%Y-%m-%d")
-                    access_time = dt_obj.strftime("%H:%M:%S")
-
-                    # Write the parsed data to the CSV
-                    writer.writerow([
-                        ip, access_date, access_time, module_viewed,
-                        'd-hub', status, size, 'Unknown', user_agent
-                    ])
-                except (json.JSONDecodeError, ValueError, TypeError):
-                    # This will skip malformed lines
-                    continue
-    except Exception as e:
-        print(f"Error processing file {file_path}: {e}")
-
-
-def main(folder_name):
-    """Main function to process all log files in a given directory."""
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../'))
-    collected_dir = os.path.join(project_root, '00_DATA', folder_name)
-    processed_dir = os.path.join(project_root, '00_DATA', '00_PROCESSED', folder_name)
-
-    if not os.path.exists(collected_dir):
-        print(f"Error: Collected data directory not found at {collected_dir}")
+    if not all_logs:
+        print("No valid d-hub log entries were found.")
+        pd.DataFrame(columns=['ip_address', 'timestamp', 'module_id', 'module_name', 'status_code', 'response_size']).to_csv(output_csv_path, index=False)
         return
 
-    os.makedirs(processed_dir, exist_ok=True)
+    df = pd.DataFrame(all_logs)
+    column_order = ['ip_address', 'timestamp', 'module_id', 'module_name', 'status_code', 'response_size']
+    df = df[column_order] 
+    df.to_csv(output_csv_path, index=False)
 
-    output_csv_path = os.path.join(processed_dir, 'summary.csv')
+    print(f"✅ Processing complete. {len(df)} entries saved to {output_csv_path}")
 
-    with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
-        # Write header
-        writer.writerow([
-            "IP Address", "Access Date", "Access Time", "Module Viewed",
-            "Location Viewed", "Status Code", "Data Saved (GB)",
-            "Device Used", "Browser Used"
-        ])
-
-        print(f"Processing log files in {collected_dir}...")
-        # Find all log files (not ending in .gz)
-        for filename in os.listdir(collected_dir):
-            if filename.endswith(".log"):
-                file_path = os.path.join(collected_dir, filename)
-                print(f"  - Parsing {filename}...")
-                parse_log_file(file_path, writer)
-
-        print(f"Processing complete. Summary saved to {output_csv_path}")
-
-if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        print("Usage: python3 dhub.py <folder_name>")
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python3 dhub.py <folder_name>", file=sys.stderr)
         sys.exit(1)
-    main(sys.argv[1])
+
+    target_folder = sys.argv[1]
+    main(target_folder)
