@@ -54,15 +54,15 @@ See the complete guide: scripts/data/automation/README.md
 
 ## 📚 Documentation map
 
-- scripts/data/README.md — Data pipeline overview and flow
-- scripts/data/collection/README.md — How logs are collected (v4/v5), outputs
-- scripts/data/process/README.md — Processing flow and CSV schemas
-  - scripts/data/process/processors/README.md — Processor internals (log.py, logv2.py, castle.py)
-- scripts/data/upload/README.md — Manual upload flow and CSV month filtering
-- scripts/data/automation/README.md — Automation with systemd (install, configure, run, troubleshoot)
-- scripts/system/README.md — System operations (networking, modem, Wi‑Fi, Raspberry Pi config)
-- scripts/troubleshoot/README.md — Diagnostic tools (Kolibri, OC4D, storage, Wi‑Fi)
-- scripts/update/README.md — Update helpers (OS and tool)
-- scripts/vpn/README.md — VPN connect/disconnect/status
-- config/README.md — automation.conf settings, ownership, permissions
-- 00_DATA/README.md — Data directory layout and naming
+- [scripts/data/README.md](scripts/data/README.md) — Data pipeline overview and flow
+- [scripts/data/collection/README.md](scripts/data/collection/README.md) — How logs are collected (v4/v5), outputs
+- [scripts/data/process/README.md](scripts/data/process/README.md) — Processing flow and CSV schemas
+  - [scripts/data/process/processors/README.md](scripts/data/process/processors/README.md) — Processor internals (log.py, logv2.py, castle.py)
+- [scripts/data/upload/README.md](scripts/data/upload/README.md) — Manual upload flow and CSV month filtering
+- [scripts/data/automation/README.md](scripts/data/automation/README.md) — Automation with systemd (install, configure, run, troubleshoot)
+- [scripts/system/README.md](scripts/system/README.md) — System operations (networking, modem, Wi‑Fi, Raspberry Pi config)
+- [scripts/troubleshoot/README.md](scripts/troubleshoot/README.md) — Diagnostic tools (Kolibri, OC4D, storage, Wi‑Fi)
+- [scripts/update/README.md](scripts/update/README.md) — Update helpers (OS and tool)
+- [scripts/vpn/README.md](scripts/vpn/README.md) — VPN connect/disconnect/status
+- [config/README.md](config/README.md) — automation.conf settings, ownership, permissions
+- [00_DATA/README.md](00_DATA/README.md) — Data directory layout and naming
