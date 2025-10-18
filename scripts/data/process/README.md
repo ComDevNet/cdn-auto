@@ -4,9 +4,9 @@ Turn collected logs into CSV summaries.
 
 Processors
 
-- v1/v4 → scripts/data/process/processors/log.py
-- v2/v5 (oc4d) → scripts/data/process/processors/logv2.py
-- v2/v5 (cape_coast_d) → scripts/data/process/processors/castle.py
+- v1/v4 → [processors/log.py](./processors/log.py)
+- v2/v5 (oc4d) → [processors/logv2.py](./processors/logv2.py)
+- v2/v5 (cape_coast_d) → [processors/castle.py](./processors/castle.py)
 
 Outputs
 
@@ -27,5 +27,5 @@ Notes & edge cases
 
 Usage
 
-- Menu: ./scripts/data/process/main.sh
-- Direct: ./scripts/data/process/logs.sh
+- Menu: [main.sh](./main.sh)
+- Direct: [logs.sh](./logs.sh)

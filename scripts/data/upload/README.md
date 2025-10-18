@@ -4,14 +4,14 @@ Manual upload tools and helpers.
 
 Main pieces
 
-- upload.sh — pick a processed run and send the final CSV to S3
-- process_csv.py — filter summary.csv for a month and produce LOCATION_MM_YYYY.csv (also used by automation in filename mode)
-- s3_bucket.sh — helper to pick/validate buckets (if present)
+- [upload.sh](./upload.sh) — pick a processed run and send the final CSV to S3
+- [process_csv.py](./process_csv.py) — filter summary.csv for a month and produce LOCATION_MM_YYYY.csv (also used by automation in filename mode)
+- [s3_bucket.sh](./s3_bucket.sh) — helper to pick/validate buckets (if present)
 
 Usage
 
-- Menu: ./scripts/data/upload/main.sh
-- Direct: ./scripts/data/upload/upload.sh
+- Menu: [main.sh](./main.sh)
+- Direct: [upload.sh](./upload.sh)
 
 Inner workings
 

@@ -13,7 +13,7 @@ End‑to‑end flow
 
 1. Collect: copies logs into 00_DATA/LOCATION_logs_YYYY_MM_DD and decompresses .gz
 2. Process: writes 00_DATA/00_PROCESSED/RUN/summary.csv using the right processor
-3. Finalize + Upload: either manual (upload/) or scheduled (automation/runner.sh)
+3. Finalize + Upload: either manual ([upload](./upload/)) or scheduled ([automation/runner.sh](./automation/runner.sh))
 
 Data contracts
 
@@ -25,6 +25,6 @@ Data contracts
 
 Where to start
 
-- Use ./scripts/data/main.sh to drive the whole flow, or jump into each submodule
+- Use [main.sh](./main.sh) to drive the whole flow, or jump into each submodule
 
 See also: scripts/data/automation/README.md for unattended scheduling.

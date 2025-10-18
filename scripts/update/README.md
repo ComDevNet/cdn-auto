@@ -2,8 +2,8 @@
 
 Update helpers for system and tool.
 
-- system.sh — OS-level updates
-- tool.sh — update this repo/tooling
+- [system.sh](./system.sh) — OS-level updates
+- [tool.sh](./tool.sh) — update this repo/tooling
 
 Inner workings
 

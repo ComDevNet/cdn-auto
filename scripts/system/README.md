@@ -2,11 +2,11 @@
 
 Utilities for system configuration and maintenance.
 
-- networking.sh and networking/ — IP, interfaces, diagnostics
-- modem.sh — USB modem connect
-- wifi-name.sh / wifi-password.sh — manage Wi‑Fi AP settings
-- raspi-config.sh — run Raspberry Pi config
-- reboot.sh / shutdown.sh — power controls
+- [networking.sh](./networking.sh) and [networking/](./networking/) — IP, interfaces, diagnostics
+- [modem.sh](./modem.sh) — USB modem connect
+- [wifi-name.sh](./wifi-name.sh) / [wifi-password.sh](./wifi-password.sh) — manage Wi‑Fi AP settings
+- [raspi-config.sh](./raspi-config.sh) — run Raspberry Pi config
+- [reboot.sh](./reboot.sh) / [shutdown.sh](./shutdown.sh) — power controls
 
 Inner workings
 

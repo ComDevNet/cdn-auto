@@ -13,8 +13,8 @@ Outputs
 
 Usage
 
-- Run the menu: ./scripts/data/collection/main.sh
-- To collect directly: ./scripts/data/collection/all.sh
+- Run the menu: [scripts/data/collection/main.sh](../../data/collection/main.sh)
+- To collect directly: [scripts/data/collection/all.sh](../../data/collection/all.sh)
 
 Inner workings
 

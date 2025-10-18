@@ -2,9 +2,9 @@
 
 Manage VPN connectivity.
 
-- connect.sh — connect to VPN
-- disconnect.sh — disconnect
-- status.sh — check VPN status
+- [connect.sh](./connect.sh) — connect to VPN
+- [disconnect.sh](./disconnect.sh) — disconnect
+- [status.sh](./status.sh) — check VPN status
 
 Inner workings
 
