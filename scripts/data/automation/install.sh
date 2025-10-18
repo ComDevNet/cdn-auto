@@ -12,8 +12,17 @@ clear
 echo ""
 echo ""
 
+# Function to safely pipe to lolcat if it exists, otherwise just cat
+pipe_lolcat() {
+  if command -v lolcat >/dev/null 2>&1; then
+    lolcat
+  else
+    cat
+  fi
+}
+
 # Display the name of the tool
-figlet -t -f 3d "INSTALL" | lolcat
+figlet -t -f 3d "INSTALL" | pipe_lolcat
 
 echo ""
 

@@ -15,7 +15,7 @@ SERVICE_GROUP="$SERVICE_USER"
 
 ts(){ date '+%Y-%m-%d %H:%M:%S'; }
 say(){ echo "[$(ts)] $*"; }
-have(){ command -v "$1" >/dev/null 2>&1; }
+have(){ command -v "$1" >/dev/null 2>/dev/1; }
 have_whiptail(){ have whiptail; }
 
 confirm(){
@@ -122,6 +122,13 @@ else
   PYTHON_SCRIPT="oc4d"
 fi
 
+# If user selected a non-castle log type, and hourly was previously configured,
+# gracefully downgrade to daily to prevent an invalid configuration.
+if [[ "$PYTHON_SCRIPT" != "cape_coast_d" && "$SCHEDULE_TYPE" == "hourly" ]]; then
+  say "⚠️ Hourly schedule is only for Cape Coast Castle logs. Downgrading to daily."
+  SCHEDULE_TYPE="daily"
+fi
+
 while :; do
   prompt_text "Device location (letters/numbers/_/-)" "${DEVICE_LOCATION}" DEVICE_LOCATION
   validate_device_location "$DEVICE_LOCATION" && break || say "Invalid location. Use 2-64 chars: [A-Za-z0-9_-]"
@@ -185,17 +192,25 @@ pick_subfolder(){
 pick_subfolder
 S3_SUBFOLDER="$(sanitize_subfolder "$S3_SUBFOLDER")"
 
-sched=$(menu_select "Choose schedule" 15 74 7 \
-  hourly "Every hour" \
-  daily  "Once per day" \
-  weekly "Once per week" \
-  custom "Custom interval (seconds)" \
+# --- Dynamic Schedule Menu ---
+sched_opts=(
+  daily   "Once per day"
+  weekly  "Once per week"
+  monthly "Once per month"
+  custom  "Custom interval (seconds)"
 )
+# If castle is selected, add hourly to the beginning of the options
+if [[ "$PYTHON_SCRIPT" == "cape_coast_d" ]]; then
+  sched_opts=( hourly "Every hour" "${sched_opts[@]}" )
+fi
+sched=$(menu_select "Choose schedule" 15 74 7 "${sched_opts[@]}")
+
 case "$sched" in
   hourly) SCHEDULE_TYPE="hourly"; RUN_INTERVAL="3600" ;;
   daily)  SCHEDULE_TYPE="daily";  RUN_INTERVAL="86400" ;;
   weekly) SCHEDULE_TYPE="weekly"; RUN_INTERVAL="604800" ;;
-  custom) while :; do prompt_text "Custom interval in seconds (>=300)" "${RUN_INTERVAL}" RUN_INTERVAL; [[ "$RUN_INTERVAL" =~ ^[0-9]+$ ]] && (( RUN_INTERVAL >= 300 )) && break || say "Enter a number >= 300."; done ;;
+  monthly) SCHEDULE_TYPE="monthly"; RUN_INTERVAL="2592000" ;; # Default to 30 days
+  custom) SCHEDULE_TYPE="custom"; while :; do prompt_text "Custom interval in seconds (>=300)" "${RUN_INTERVAL}" RUN_INTERVAL; [[ "$RUN_INTERVAL" =~ ^[0-9]+$ ]] && (( RUN_INTERVAL >= 300 )) && break || say "Enter a number >= 300."; done ;;
 esac
 
 summary=$(cat <<EOF
@@ -246,7 +261,10 @@ test_upload(){
     chown "$SERVICE_USER:$SERVICE_GROUP" "$tmpfile" 2>/dev/null || true
     chmod 600 "$tmpfile" 2>/dev/null || true
   fi
-  trap 'rm -f "$tmpfile" 2>/dev/null || true' RETURN EXIT
+  # When the function returns, remove the temp file AND unset the script-wide EXIT trap.
+  trap 'rm -f "$tmpfile" 2>/dev/null; trap - EXIT' RETURN
+  # If the script exits unexpectedly while this function is running, clean up the temp file.
+  trap 'rm -f "$tmpfile" 2>/dev/null' EXIT
 
   say "▶ Test upload → s3://$bucket/$key"
   if aws_su s3api put-object --bucket "$bucket" --key "$key" --body "$tmpfile" >/dev/null 2>&1; then
@@ -283,10 +301,11 @@ sudo mkdir -p "$DROP_DIR"
   echo "OnCalendar="
   echo "OnUnitActiveSec="
   case "$SCHEDULE_TYPE" in
-    hourly) echo "OnCalendar=hourly" ;;
-    daily)  echo "OnCalendar=daily"  ;;
-    weekly) echo "OnCalendar=weekly" ;;
-    custom) echo "OnUnitActiveSec=${RUN_INTERVAL}" ;;
+    hourly)  echo "OnCalendar=hourly"  ;;
+    daily)   echo "OnCalendar=daily"   ;;
+    weekly)  echo "OnCalendar=weekly"  ;;
+    monthly) echo "OnCalendar=monthly" ;;
+    custom)  echo "OnUnitActiveSec=${RUN_INTERVAL}" ;;
   esac
   echo "Persistent=true"
 } | sudo tee "$OVERRIDE" >/dev/null
@@ -295,3 +314,4 @@ sudo systemctl enable "$TIMER" >/dev/null
 sudo systemctl restart "$TIMER"
 say "⏱  Timer updated and started: $TIMER"
 say "✅ Configuration complete."
+

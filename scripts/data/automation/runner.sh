@@ -33,6 +33,7 @@ DEVICE_LOCATION="${DEVICE_LOCATION:-device}"
 PYTHON_SCRIPT="${PYTHON_SCRIPT:-oc4d}"
 S3_BUCKET="${S3_BUCKET:-s3://example-bucket}"
 S3_SUBFOLDER="${S3_SUBFOLDER:-}"
+SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}" # Default schedule if not in config
 
 DATA_DIR="$PROJECT_ROOT/00_DATA"
 PROCESSED_ROOT="$DATA_DIR/00_PROCESSED"
@@ -119,18 +120,43 @@ python3 "$PROCESSOR" "$NEW_FOLDER"
 
 PROCESSED_DIR="$PROCESSED_ROOT/$NEW_FOLDER"
 SUMMARY="$PROCESSED_DIR/summary.csv"
-if [[ ! -s "$SUMMARY" ]]; then log "❌ Missing or empty summary at $SUMMARY"; exit 1; fi
+if [[ ! -s "$SUMMARY" ]]; then log "ℹ️ No new data in summary.csv. Nothing to process."; exit 0; fi
 
-MONTH="$(echo "$NEW_FOLDER" | awk -F'_' '{print $(NF-1)}' || true)"
-if ! [[ "$MONTH" =~ ^[0-9]{2}$ ]]; then MONTH="$(date +%m)"; fi
-log "🧮 Filter month=$MONTH → final CSV"
-python3 scripts/data/upload/process_csv.py "$PROCESSED_DIR" "$DEVICE_LOCATION" "$MONTH" "summary.csv"
+FINAL_CSV="" # This variable will hold the path to the final file
 
-shopt -s nullglob
-FINAL_CAND=( "$PROCESSED_DIR/${DEVICE_LOCATION}_${MONTH}_"*"_access_logs.csv" )
-shopt -u nullglob
-if [[ ${#FINAL_CAND[@]} -eq 0 ]]; then log "❌ Could not locate final CSV after filtering."; exit 1; fi
-FINAL_CSV="${FINAL_CAND[0]}"
+# --- Intelligent Filtering based on configured schedule ---
+case "$SCHEDULE_TYPE" in
+  hourly|daily|weekly)
+    log "🧮 Filtering for '$SCHEDULE_TYPE' schedule..."
+    # The python script will print the filename if it creates one.
+    FINAL_CSV_BASENAME=$(python3 "scripts/data/automation/filter_time_based.py" "$PROCESSED_DIR" "$DEVICE_LOCATION" "$SCHEDULE_TYPE")
+    if [[ -n "$FINAL_CSV_BASENAME" ]]; then
+        FINAL_CSV="$PROCESSED_DIR/$FINAL_CSV_BASENAME"
+    fi
+    ;;
+
+  monthly)
+    log "🧮 Filtering for 'monthly' schedule..."
+    MONTH="$(date +%m)"
+    # The python script will print the filename when called with 'filename' mode.
+    FINAL_CSV_BASENAME=$(python3 scripts/data/upload/process_csv.py "$PROCESSED_DIR" "$DEVICE_LOCATION" "$MONTH" "summary.csv" "filename")
+    if [[ -n "$FINAL_CSV_BASENAME" ]]; then
+        FINAL_CSV="$PROCESSED_DIR/$FINAL_CSV_BASENAME"
+    fi
+    ;;
+
+  *)
+    log "❌ Unknown SCHEDULE_TYPE '$SCHEDULE_TYPE' in config. Cannot filter."
+    exit 1
+    ;;
+esac
+
+# Check if a final file was actually created by the filtering process
+if [[ -z "$FINAL_CSV" || ! -f "$FINAL_CSV" ]]; then
+  log "ℹ️ No new entries matched the time period. Run finished."
+  exit 0
+fi
+
 log "📦 Final CSV: $(basename "$FINAL_CSV")"
 
 if has_internet; then
@@ -148,3 +174,4 @@ if has_internet; then
 else
   log "📵 No internet. Queueing new file."; cp -f "$FINAL_CSV" "$QUEUE_DIR/"
 fi
+
