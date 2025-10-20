@@ -4,10 +4,11 @@ echo ""
 echo "Server Types:"
 echo "1. V4 Logs (Located at /var/log/apache2)"
 echo "2. V5 Logs (Located at /var/log/oc4d)"
+echo "3. D-Hub Logs (Located at /var/log/dhub)"
 echo ""
 
 # Prompt the user to select the log type
-read -p "Please select the type of logs to collect (1 for V4, 2 for V5): " log_choice
+read -p "Please select the type of logs to collect (1 for V4, 2 for V5, 3 for D-Hub): " log_choice
 
 # Set the log directory and collection logic based on the user's selection
 case $log_choice in
@@ -19,8 +20,12 @@ case $log_choice in
         log_directory="/var/log/oc4d"
         log_type="V5 Logs"
         ;;
+    3)
+        log_directory="/var/log/dhub"
+        log_type="D-Hub Logs"
+        ;;
     *)
-        echo "Invalid choice. Please run the script again and choose either 1 or 2."
+        echo "Invalid choice. Please run the script again and choose 1, 2, or 3."
         exit 1
         ;;
 esac
@@ -55,6 +60,10 @@ elif [[ "$log_choice" == "2" ]]; then
             -o \
             -name "*.gz" \
         \) \
+        -exec cp {} "$new_folder"/ \;
+elif [[ "$log_choice" == "3" ]]; then
+    # For D-Hub logs: Collect *.log files
+    find "$log_directory" -type f -name "*.log" \
         -exec cp {} "$new_folder"/ \;
 fi
 
