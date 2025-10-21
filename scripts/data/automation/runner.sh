@@ -98,6 +98,14 @@ case "$SERVER_VERSION" in
        \( -name 'capecoastcastle-*.log' ! -name 'capecoastcastle-exceptions-*.log' \) -o \
        -name '*.gz' \) -exec cp -n {} "$COLLECT_DIR"/ \;
     ;;
+  v3|dhub|d-hub)
+    LOG_DIR="/var/log/dhub"
+    find "$LOG_DIR" -type f -name '*.log' -exec cp -n {} "$COLLECT_DIR"/ \;
+    ;;
+  v4|server\ v6|v6)
+    LOG_DIR="/var/log/oc4d"
+    find "$LOG_DIR" -type f -name 'v6-*.log' ! -name 'v6-exceptions-*.log' -exec cp -n {} "$COLLECT_DIR"/ \;
+    ;;
   *) log "❌ Unknown SERVER_VERSION '$SERVER_VERSION'"; exit 1;;
 esac
 shopt -s nullglob
@@ -114,6 +122,8 @@ case "$SERVER_VERSION" in
       *) PROCESSOR="scripts/data/process/processors/logv2.py" ;;
     esac
     ;;
+  v3|dhub|d-hub) PROCESSOR="scripts/data/process/processors/dhub.py" ;;
+  v4|server\ v6|v6) PROCESSOR="scripts/data/process/processors/log-v6.py" ;;
 esac
 log "🐍 Process → $PROCESSOR  (folder=$NEW_FOLDER)"
 python3 "$PROCESSOR" "$NEW_FOLDER"

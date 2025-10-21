@@ -4,7 +4,7 @@ Menus and scripts for collecting, processing, uploading, and automating analytic
 
 Submodules
 
-- collection — gathers logs from v4 (Apache) and v5 (OC4D)
+- collection — gathers logs from v4 (Apache), v5 (OC4D), v3 (D-Hub), and v6 (OC4D with module paths)
 - process — parses logs into CSV summaries via processors
 - upload — manual month filtering and S3 upload
 - automation — unattended runs with systemd
@@ -19,9 +19,12 @@ Data contracts
 
 - Input logs (v4): text lines in Apache combined format (access.log\*)
 - Input logs (v5): JSON per line with a message field that embeds HTTP request data
+- Input logs (v3): JSON per line with a message field; paths include UUID `/modules/[uuid]/[module-name]/`, `/uploads/modules/[uuid]/[module-name]/`, or `/uploads/other-modules/[module-name]/`
+- Input logs (v6): JSON per line with a message field stored in /var/log/oc4d; paths include module paths similar to v3
 - Output CSV (summary.csv) columns (vary by processor) include at least:
   - IP Address, Access Date, Module Viewed, Status Code, Data Saved (GB), Device Used, Browser Used
   - Some processors (e.g., castle.py) also include Access Time and Location Viewed
+  - dhub.py and log-v6.py use the same schema as logv2.py, extracting module names from extended module paths
 
 Where to start
 

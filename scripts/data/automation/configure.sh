@@ -107,11 +107,18 @@ RUN_INTERVAL="${RUN_INTERVAL:-86400}"
 ensure_preflight_ok || true
 
 # --- menus
-sel=$(menu_select "Select server version" 15 74 5 \
+sel=$(menu_select "Select server version" 15 74 7 \
   v4 "Server v4 (Apache / access.log*)" \
   v5 "Server v5 (OC4D or Cape Coast Castle)" \
+  v6 "Server v6 (OC4D with module paths)" \
+  dhub "D-Hub (UUID-based module logs)" \
 )
-[[ "$sel" == "v4" ]] && SERVER_VERSION="v1" || SERVER_VERSION="v2"
+case "$sel" in
+  v4) SERVER_VERSION="v1" ;;
+  v5) SERVER_VERSION="v2" ;;
+  v6) SERVER_VERSION="v4" ;;
+  dhub) SERVER_VERSION="v3" ;;
+esac
 
 if [[ "$SERVER_VERSION" == "v2" ]]; then
   PYTHON_SCRIPT=$(menu_select "Select logs flavor (v2)" 12 74 5 \

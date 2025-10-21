@@ -4,6 +4,8 @@ Collect server logs from:
 
 - v4 (Apache) at /var/log/apache2 (access.log\*)
 - v5 (OC4D) at /var/log/oc4d (oc4d-_.log, capecoastcastle-_.log, *.gz; excludes *exceptions\*)
+- v3 (D-Hub) at /var/log/dhub (\*.log)
+- v6 (Server v6) at /var/log/oc4d (v6-\_.log; excludes \*exceptions\*)
 
 Outputs
 
@@ -18,11 +20,13 @@ Usage
 
 Inner workings
 
-- The script prompts for server type (v4 or v5) and device location (used in the folder name)
+- The script prompts for server type (v4, v5, v3, or v6) and device location (used in the folder name)
 - v4 copies files matching access.log\* from /var/log/apache2
 - v5 copies:
   - oc4d-_.log (excluding oc4d-exceptions-_.log)
   - capecoastcastle-_.log (excluding capecoastcastle-exceptions-_.log)
   - any \*.gz files
+- v3 copies \*.log files from /var/log/dhub
+- v6 copies v6-_.log files (excluding v6-exceptions-_.log) from /var/log/oc4d
 - After copying, .gz files are decompressed so processors can read plain text
 - The resulting folder is moved into 00_DATA for the processing stage

@@ -7,6 +7,8 @@ Processors
 - v1/v4 → [processors/log.py](./processors/log.py)
 - v2/v5 (oc4d) → [processors/logv2.py](./processors/logv2.py)
 - v2/v5 (cape_coast_d) → [processors/castle.py](./processors/castle.py)
+- v3/dhub → [processors/dhub.py](./processors/dhub.py)
+- v4/v6 → [processors/log-v6.py](./processors/log-v6.py)
 
 Outputs
 
@@ -18,10 +20,14 @@ CSV schemas
 - v4/log.py: columns = [IP Address, Access Date, Module Viewed, Status Code, Data Saved (GB), Device Used, Browser Used]
 - v5/logv2.py: columns = [IP Address, Access Date, Module Viewed, Status Code, Data Saved (GB), Device Used, Browser Used]
 - v5/castle.py: columns = [IP Address, Access Date, Access Time, Module Viewed, Location Viewed, Status Code, Data Saved (GB), Device Used, Browser Used]
+- v3/dhub.py: columns = [IP Address, Access Date, Module Viewed, Status Code, Data Saved (GB), Device Used, Browser Used]
+- v6/log-v6.py: columns = [IP Address, Access Date, Module Viewed, Status Code, Data Saved (GB), Device Used, Browser Used]
 
 Notes & edge cases
 
 - logv2.py expects each line to be JSON with a message field containing a combined-log-like string
+- dhub.py is based on logv2.py but extracts module names from extended D-Hub paths: `/uploads/modules/[id]/[module-name]`, `/modules/[id]/[module-name]`, or `/uploads/other-modules/[module-name]`
+- log-v6.py is similar to dhub.py but for logs stored in /var/log/oc4d folder with v6-\*.log filename pattern
 - castle.py parses a more structured message; it logs regex and timestamp errors into error_log.txt in the processed folder and normalizes IPv6 ::ffff: prefix
 - All processors normalize sizes to gigabytes and parse user agents to OS family and browser family
 
