@@ -52,7 +52,7 @@ def process_csv(folder, location, month, processed_file_name, mode='year'):
         sys.exit(0)
 
     # Final rename
-    final_name = f"{location}_{month:02d}_{latest_year}.csv"
+    final_name = f"{location}_{month:02d}_{latest_year}_access_logs.csv"
     final_path = os.path.join(folder, final_name)
     os.rename(temp_output_path, final_path)
 
