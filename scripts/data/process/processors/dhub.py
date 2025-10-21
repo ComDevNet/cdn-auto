@@ -9,6 +9,7 @@ import sys
 def process_log_file(file_path):
     """Process a single log file and extract data."""
     log_data = []
+    skipped_count = 0
 
     # New regex: optional second "- " before the "[" 
     log_pattern = re.compile(
@@ -30,7 +31,9 @@ def process_log_file(file_path):
 
                 match = log_pattern.search(message)
                 if not match:
-                    print(f"Skipping line (unexpected format): {message}")
+                    skipped_count += 1
+                    if skipped_count <= 3:  # Show first 3 skipped lines
+                        print(f"Skipping line (unexpected format): {message[:100]}")
                     continue
 
                 g = match.groupdict()
@@ -91,6 +94,11 @@ def process_log_file(file_path):
             except Exception as e:
                 print(f"Error processing line: {line.strip()}, Error: {e}")
 
+    if log_data:
+        print(f"  → Extracted {len(log_data)} records from {file_path}")
+    else:
+        print(f"  ⚠ No records extracted from {file_path} (total skipped: {skipped_count})")
+
     return log_data
 
 def save_processed_log_file(folder_path, file_path, log_data):
@@ -101,18 +109,19 @@ def save_processed_log_file(folder_path, file_path, log_data):
         f"{os.path.splitext(os.path.basename(file_path))[0]}.csv"
     )
     
-    if log_data:  # Only write files that have data
-        with open(processed_file_path, 'w', encoding='utf-8', newline='') as output_file:
-            csv_writer = csv.writer(output_file)
-            csv_writer.writerow([
-                'IP Address',
-                'Access Date',
-                'Module Viewed',
-                'Status Code',
-                'Data Saved (GB)',
-                'Device Used',
-                'Browser Used'
-            ])
+    # Always write the file with headers, even if empty
+    with open(processed_file_path, 'w', encoding='utf-8', newline='') as output_file:
+        csv_writer = csv.writer(output_file)
+        csv_writer.writerow([
+            'IP Address',
+            'Access Date',
+            'Module Viewed',
+            'Status Code',
+            'Data Saved (GB)',
+            'Device Used',
+            'Browser Used'
+        ])
+        if log_data:
             csv_writer.writerows(log_data)
 
 
