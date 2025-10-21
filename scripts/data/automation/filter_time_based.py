@@ -30,7 +30,7 @@ def process_time_based_csv(folder, location, schedule_type):
         end_time = start_time.replace(minute=59, second=59, microsecond=999999)
         file_timestamp_dt = target_hour_dt
         file_timestamp = file_timestamp_dt.strftime("%H_%d_%m_%Y")
-        output_filename = f"{location}_{file_timestamp}.csv"
+        output_filename = f"{location}_{file_timestamp}_access_logs.csv"
 
     elif schedule_type == "daily":
         # Target yesterday
@@ -39,7 +39,7 @@ def process_time_based_csv(folder, location, schedule_type):
         end_time = datetime.combine(yesterday_dt.date(), time.max)
         file_timestamp_dt = yesterday_dt
         file_timestamp = file_timestamp_dt.strftime("%d_%m_%Y")
-        output_filename = f"{location}_{file_timestamp}.csv"
+        output_filename = f"{location}_{file_timestamp}_access_logs.csv"
 
     elif schedule_type == "weekly":
         # Target the previous full week (last Monday to last Sunday)
@@ -53,7 +53,7 @@ def process_time_based_csv(folder, location, schedule_type):
         file_timestamp_dt = start_of_last_week
         # Use the week number (and year) of the processed week for the filename
         file_timestamp = file_timestamp_dt.strftime("%W_%m_%Y")
-        output_filename = f"{location}_{file_timestamp}.csv"
+        output_filename = f"{location}_{file_timestamp}_access_logs.csv"
         
     else:
         sys.stderr.write(f"Error: Invalid schedule type '{schedule_type}' provided.\n")
