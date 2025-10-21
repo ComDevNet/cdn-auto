@@ -78,7 +78,12 @@ def process_time_based_csv(folder, location, schedule_type):
             for row in reader:
                 try:
                     row_date_str = row[1]
-                    row_time_str = row[2] 
+                    # Check if Access Time (column 2) exists; if not, use midnight
+                    if len(row) > 2 and row[2]:
+                        row_time_str = row[2]
+                    else:
+                        row_time_str = "00:00:00"  # Default to midnight if no time available
+                    
                     date_obj = datetime.strptime(f"{row_date_str} {row_time_str}", '%Y-%m-%d %H:%M:%S')
                     
                     # Check if the log entry's timestamp is within the target window
