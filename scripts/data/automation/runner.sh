@@ -147,7 +147,8 @@ case "$SCHEDULE_TYPE" in
 
   monthly)
     log "🧮 Filtering for 'monthly' schedule..."
-    MONTH="$(date +%m)"
+    # Get the previous month (use 0 as a signal to calculate it in the Python script)
+    MONTH="0"
     # The python script will print the filename when called with 'filename' mode.
     FINAL_CSV_BASENAME=$(python3 scripts/data/upload/process_csv.py "$PROCESSED_DIR" "$DEVICE_LOCATION" "$MONTH" "summary.csv" "filename")
     if [[ -n "$FINAL_CSV_BASENAME" ]]; then

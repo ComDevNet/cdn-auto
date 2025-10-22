@@ -3,13 +3,15 @@
 import sys
 import os
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 
 def process_csv(folder, location, month, processed_file_name, mode='year'):
     """
     Filters a CSV for a specific month.
     - In 'year' mode (default, for manual upload), it prints the year.
     - In 'filename' mode (for automation), it prints the final filename.
+    
+    For automation (mode='filename'), if month is negative, it calculates the previous month.
     """
     input_path = os.path.join(folder, processed_file_name)
     temp_output_path = os.path.join(folder, "temp_filtered.csv")
@@ -17,6 +19,14 @@ def process_csv(folder, location, month, processed_file_name, mode='year'):
     latest_year = None
     rows_written = 0
 
+    # Handle previous month calculation for automation
+    if month < 1:
+        # Calculate previous month
+        today = datetime.now()
+        first_day_this_month = today.replace(day=1)
+        last_day_prev_month = first_day_this_month - timedelta(days=1)
+        month = last_day_prev_month.month
+    
     try:
         with open(input_path, 'r', newline='', encoding='utf-8') as infile, \
              open(temp_output_path, 'w', newline='', encoding='utf-8') as outfile:
@@ -70,10 +80,11 @@ if __name__ == "__main__":
     location = sys.argv[2]
     try:
         month = int(sys.argv[3])
-        if not 1 <= month <= 12:
+        # Allow 0 for automation (previous month calculation) or 1-12 for manual
+        if not (month == 0 or 1 <= month <= 12):
             raise ValueError
     except ValueError:
-        sys.stderr.write("Error: Month must be an integer between 1 and 12.\n")
+        sys.stderr.write("Error: Month must be 0 (for previous month) or an integer between 1 and 12.\n")
         sys.exit(1)
 
     processed_file_name = sys.argv[4]

@@ -78,19 +78,14 @@ def process_time_based_csv(folder, location, schedule_type):
             for row in reader:
                 try:
                     row_date_str = row[1]
-                    # Check if Access Time (column 2) exists; if not, use midnight
-                    if len(row) > 2 and row[2]:
-                        row_time_str = row[2]
-                    else:
-                        row_time_str = "00:00:00"  # Default to midnight if no time available
+                    # Parse date only (don't require time column since dhub/v6 don't have it)
+                    date_obj = datetime.strptime(row_date_str, '%Y-%m-%d')
                     
-                    date_obj = datetime.strptime(f"{row_date_str} {row_time_str}", '%Y-%m-%d %H:%M:%S')
-                    
-                    # Check if the log entry's timestamp is within the target window
-                    if start_time <= date_obj <= end_time:
+                    # Check if the log entry's date is within the target window
+                    if start_time.date() <= date_obj.date() <= end_time.date():
                         writer.writerow(row)
                         rows_written += 1
-                except (ValueError, IndexError):
+                except (ValueError, IndexError) as e:
                     continue
 
     except Exception as e:
