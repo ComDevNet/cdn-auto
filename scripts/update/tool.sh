@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# This script updates this tool.
+# This script updates this tool while preserving local configurations.
 
 # Save the current directory
 current_directory=$(pwd)
@@ -11,20 +11,59 @@ cd "$(dirname "$0")" || exit
 # Color variables
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Pull the latest changes from GitHub
-git reset --hard HEAD
-git pull
+echo -e "${YELLOW}🔄 Preparing to update...${NC}"
+echo ""
 
-# Check if the pull was successful
+# Only stash configuration files, not scripts
+# This ensures script updates are preserved while configs are restored
+echo "📦 Backing up your local configurations..."
+git stash push -m "Local configuration backup before update" \
+    config/ \
+    .env \
+    .env.local \
+    > /dev/null 2>&1
+
+# Fetch the latest changes from GitHub
+echo "⬇️  Fetching latest changes from GitHub..."
+git fetch origin > /dev/null 2>&1
+
+# Reset to the latest remote version (gets all script updates)
+echo "🔄 Applying updates..."
+git reset --hard origin/$(git rev-parse --abbrev-ref HEAD) > /dev/null 2>&1
+
+# Check if the update was successful
 if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✅ Script updated successfully.${NC}"
     echo ""
-    echo -e "${GREEN}Script updated successfully.${NC}"
-    echo ""
+    
+    # Restore ONLY configuration files
+    echo "🔧 Restoring your configurations..."
+    git stash pop > /dev/null 2>&1
+    
+    stash_result=$?
+    if [ $stash_result -eq 0 ]; then
+        echo -e "${GREEN}✅ Configurations restored.${NC}"
+        echo ""
+    elif [ $stash_result -eq 1 ]; then
+        # Exit code 1 means no stash to pop (no configs were changed)
+        echo -e "${GREEN}✅ No configuration changes to restore.${NC}"
+        echo ""
+    else
+        echo -e "${YELLOW}⚠️  Could not automatically restore configurations.${NC}"
+        echo -e "${YELLOW}You can manually restore them with: git stash pop${NC}"
+        echo ""
+    fi
 else
-    echo -e "${RED}Failed to update the script. Please check for updates manually.${NC}"
+    echo -e "${RED}❌ Failed to update the script. Please check for updates manually.${NC}"
     echo ""
+    
+    # Try to restore the stashed changes
+    echo "Restoring stashed changes..."
+    git stash pop > /dev/null 2>&1
+    
     exit 1
 fi
 
