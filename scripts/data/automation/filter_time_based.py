@@ -31,6 +31,8 @@ def process_time_based_csv(folder, location, schedule_type):
         file_timestamp_dt = target_hour_dt
         file_timestamp = file_timestamp_dt.strftime("%H_%d_%m_%Y")
         output_filename = f"{location}_{file_timestamp}_access_logs.csv"
+        log_period = f"{start_time.strftime('%Y-%m-%d %H:00')} to {end_time.strftime('%H:59')}"
+        sys.stderr.write(f"📊 Filtering logs for: {log_period}\n")
 
     elif schedule_type == "daily":
         # Target yesterday
@@ -40,6 +42,8 @@ def process_time_based_csv(folder, location, schedule_type):
         file_timestamp_dt = yesterday_dt
         file_timestamp = file_timestamp_dt.strftime("%d_%m_%Y")
         output_filename = f"{location}_{file_timestamp}_access_logs.csv"
+        log_period = f"{start_time.strftime('%Y-%m-%d')} (entire day)"
+        sys.stderr.write(f"📊 Filtering logs for: {log_period}\n")
 
     elif schedule_type == "weekly":
         # Target the previous full week (last Monday to last Sunday)
@@ -54,6 +58,8 @@ def process_time_based_csv(folder, location, schedule_type):
         # Use the week number (and year) of the processed week for the filename
         file_timestamp = file_timestamp_dt.strftime("%W_%m_%Y")
         output_filename = f"{location}_{file_timestamp}_access_logs.csv"
+        log_period = f"Week {start_of_last_week.strftime('%W')} ({start_time.strftime('%Y-%m-%d')} to {end_of_last_week.strftime('%Y-%m-%d')})"
+        sys.stderr.write(f"📊 Filtering logs for: {log_period}\n")
         
     else:
         sys.stderr.write(f"Error: Invalid schedule type '{schedule_type}' provided.\n")
@@ -94,9 +100,11 @@ def process_time_based_csv(folder, location, schedule_type):
 
     if rows_written > 0:
         os.rename(temp_output_path, final_output_path)
+        sys.stderr.write(f"✅ Found {rows_written} log entries for uploading\n")
         print(output_filename)
     else:
         os.remove(temp_output_path)
+        sys.stderr.write(f"⚠️  No log entries found for this period\n")
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:

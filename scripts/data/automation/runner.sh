@@ -168,7 +168,8 @@ if [[ -z "$FINAL_CSV" || ! -f "$FINAL_CSV" ]]; then
   exit 0
 fi
 
-log "📦 Final CSV: $(basename "$FINAL_CSV")"
+FILE_SIZE=$(du -h "$FINAL_CSV" | cut -f1)
+log "📦 Prepared for upload: $(basename "$FINAL_CSV") ($FILE_SIZE)"
 
 if has_internet; then
   log "🌐 Internet OK. Flushing queue…"

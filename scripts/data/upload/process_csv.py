@@ -26,6 +26,9 @@ def process_csv(folder, location, month, processed_file_name, mode='year'):
         first_day_this_month = today.replace(day=1)
         last_day_prev_month = first_day_this_month - timedelta(days=1)
         month = last_day_prev_month.month
+        sys.stderr.write(f"📊 Filtering logs for: {last_day_prev_month.strftime('%B %Y')} (previous month)\n")
+    else:
+        sys.stderr.write(f"📊 Filtering logs for: Month {month}\n")
     
     try:
         with open(input_path, 'r', newline='', encoding='utf-8') as infile, \
@@ -58,6 +61,7 @@ def process_csv(folder, location, month, processed_file_name, mode='year'):
 
     if rows_written == 0:
         os.remove(temp_output_path)
+        sys.stderr.write(f"⚠️  No log entries found for this period\n")
         # Print nothing if no file was created
         sys.exit(0)
 
@@ -65,6 +69,7 @@ def process_csv(folder, location, month, processed_file_name, mode='year'):
     final_name = f"{location}_{month:02d}_{latest_year}_access_logs.csv"
     final_path = os.path.join(folder, final_name)
     os.rename(temp_output_path, final_path)
+    sys.stderr.write(f"✅ Found {rows_written} log entries for uploading\n")
 
     if mode == 'filename':
         print(final_name)
