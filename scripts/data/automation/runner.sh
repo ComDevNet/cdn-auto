@@ -89,22 +89,22 @@ mkdir -p "$COLLECT_DIR"
 case "$SERVER_VERSION" in
   v1|server\ v4|v4)
     LOG_DIR="/var/log/apache2"
-    find "$LOG_DIR" -type f -name 'access.log*' -exec cp -n {} "$COLLECT_DIR"/ \;
+    find "$LOG_DIR" -type f -name 'access.log*' -exec cp {} "$COLLECT_DIR"/ \;
     ;;
   v2|server\ v5|v5)
     LOG_DIR="/var/log/oc4d"
     find "$LOG_DIR" -type f \( \
        \( -name 'oc4d-*.log' ! -name 'oc4d-exceptions-*.log' \) -o \
        \( -name 'capecoastcastle-*.log' ! -name 'capecoastcastle-exceptions-*.log' \) -o \
-       -name '*.gz' \) -exec cp -n {} "$COLLECT_DIR"/ \;
+       -name '*.gz' \) -exec cp {} "$COLLECT_DIR"/ \;
     ;;
   v3|dhub|d-hub)
     LOG_DIR="/var/log/dhub"
-    find "$LOG_DIR" -type f -name '*.log' -exec cp -n {} "$COLLECT_DIR"/ \;
+    find "$LOG_DIR" -type f -name '*.log' -exec cp {} "$COLLECT_DIR"/ \;
     ;;
   v4|server\ v6|v6)
     LOG_DIR="/var/log/oc4d"
-    find "$LOG_DIR" -type f -name 'v6-*.log' ! -name 'v6-exceptions-*.log' -exec cp -n {} "$COLLECT_DIR"/ \;
+    find "$LOG_DIR" -type f -name 'v6-*.log' ! -name 'v6-exceptions-*.log' -exec cp {} "$COLLECT_DIR"/ \;
     ;;
   *) log "❌ Unknown SERVER_VERSION '$SERVER_VERSION'"; exit 1;;
 esac
