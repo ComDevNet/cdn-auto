@@ -102,9 +102,9 @@ case "$SERVER_VERSION" in
     LOG_DIR="/var/log/dhub"
     find "$LOG_DIR" -type f -name '*.log' -exec cp {} "$COLLECT_DIR"/ \;
     ;;
-  v4|server\ v6|v6)
+  server\ v6|v6)
     LOG_DIR="/var/log/oc4d"
-    find "$LOG_DIR" -type f -name 'v6-*.log' ! -name 'v6-exceptions-*.log' -exec cp {} "$COLLECT_DIR"/ \;
+    find "$LOG_DIR" -type f -name 'oc4d-*.log' ! -name 'oc4d-exceptions-*.log' -exec cp {} "$COLLECT_DIR"/ \;
     ;;
   *) log "❌ Unknown SERVER_VERSION '$SERVER_VERSION'"; exit 1;;
 esac
@@ -123,7 +123,7 @@ case "$SERVER_VERSION" in
     esac
     ;;
   v3|dhub|d-hub) PROCESSOR="scripts/data/process/processors/dhub.py" ;;
-  v4|server\ v6|v6) PROCESSOR="scripts/data/process/processors/log-v6.py" ;;
+  server\ v6|v6) PROCESSOR="scripts/data/process/processors/log-v6.py" ;;
 esac
 log "🐍 Process → $PROCESSOR  (folder=$NEW_FOLDER)"
 python3 "$PROCESSOR" "$NEW_FOLDER"

@@ -116,7 +116,7 @@ sel=$(menu_select "Select server version" 15 74 7 \
 case "$sel" in
   v4) SERVER_VERSION="v1" ;;
   v5) SERVER_VERSION="v2" ;;
-  v6) SERVER_VERSION="v4" ;;
+  v6) SERVER_VERSION="v6" ;;
   dhub) SERVER_VERSION="v3" ;;
 esac
 
