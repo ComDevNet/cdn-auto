@@ -9,19 +9,19 @@ read -p "Enter the location of the device: " device_location
 # Replace spaces with underscores
 device_location=${device_location// /_}
 
-# Specify the log directory for Server v6
-log_directory="/var/log/v6"
+# Specify the log directory for Server v6 (stored under oc4d)
+log_directory="/var/log/oc4d"
 
 # Create a new folder with location and timestamp
 new_folder="${device_location}_logs_$(date '+%Y_%m_%d')"
 mkdir -p "$new_folder"
 
-# Copy only relevant log files from v6 logs
+# Copy only relevant v6 log files (exclude exceptions), include gz if present
 find "$log_directory" -type f \
     \( \
-        -name "*.log" \
+        \( -name 'oc4d-*.log' ! -name 'oc4d-exceptions-*.log' \) \
         -o \
-        -name "*.gz" \
+        -name 'oc4d-*.log.gz' \
     \) \
     -exec cp {} "$new_folder"/ \;
 
