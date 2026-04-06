@@ -103,6 +103,7 @@ S3_BUCKET="${S3_BUCKET:-s3://example-bucket}"
 S3_SUBFOLDER="${S3_SUBFOLDER:-}"
 SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
+KOLIBRI_FACILITY_ID="${KOLIBRI_FACILITY_ID:-}"
 
 ensure_preflight_ok || true
 
@@ -228,6 +229,7 @@ Device location: $DEVICE_LOCATION
 S3 bucket      : $S3_BUCKET
 S3 subfolder   : ${S3_SUBFOLDER:-<root>}
 Schedule       : $SCHEDULE_TYPE (interval=${RUN_INTERVAL}s)
+Kolibri facility: ${KOLIBRI_FACILITY_ID:-<default facility>}
 Config file    : $CONFIG_FILE
 EOF
 )
