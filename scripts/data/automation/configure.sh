@@ -103,6 +103,7 @@ S3_BUCKET="${S3_BUCKET:-s3://example-bucket}"
 S3_SUBFOLDER="${S3_SUBFOLDER:-}"
 SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
+KOLIBRI_FACILITY_ID="${KOLIBRI_FACILITY_ID:-}"
 
 ensure_preflight_ok || true
 
@@ -204,6 +205,7 @@ sched_opts=(
   daily   "Once per day"
   weekly  "Once per week"
   monthly "Once per month"
+  yearly  "Once per year"
   custom  "Custom interval (seconds)"
 )
 # If castle is selected, add hourly to the beginning of the options
@@ -213,11 +215,12 @@ fi
 sched=$(menu_select "Choose schedule" 15 74 7 "${sched_opts[@]}")
 
 case "$sched" in
-  hourly) SCHEDULE_TYPE="hourly"; RUN_INTERVAL="3600" ;;
-  daily)  SCHEDULE_TYPE="daily";  RUN_INTERVAL="86400" ;;
-  weekly) SCHEDULE_TYPE="weekly"; RUN_INTERVAL="604800" ;;
-  monthly) SCHEDULE_TYPE="monthly"; RUN_INTERVAL="2592000" ;; # Default to 30 days
-  custom) SCHEDULE_TYPE="custom"; while :; do prompt_text "Custom interval in seconds (>=300)" "${RUN_INTERVAL}" RUN_INTERVAL; [[ "$RUN_INTERVAL" =~ ^[0-9]+$ ]] && (( RUN_INTERVAL >= 300 )) && break || say "Enter a number >= 300."; done ;;
+  hourly)  SCHEDULE_TYPE="hourly";  RUN_INTERVAL="3600" ;;
+  daily)   SCHEDULE_TYPE="daily";   RUN_INTERVAL="86400" ;;
+  weekly)  SCHEDULE_TYPE="weekly";  RUN_INTERVAL="604800" ;;
+  monthly) SCHEDULE_TYPE="monthly"; RUN_INTERVAL="2592000" ;;
+  yearly)  SCHEDULE_TYPE="yearly";  RUN_INTERVAL="31536000" ;;
+  custom)  SCHEDULE_TYPE="custom"; while :; do prompt_text "Custom interval in seconds (>=300)" "${RUN_INTERVAL}" RUN_INTERVAL; [[ "$RUN_INTERVAL" =~ ^[0-9]+$ ]] && (( RUN_INTERVAL >= 300 )) && break || say "Enter a number >= 300."; done ;;
 esac
 
 summary=$(cat <<EOF
@@ -228,6 +231,7 @@ Device location: $DEVICE_LOCATION
 S3 bucket      : $S3_BUCKET
 S3 subfolder   : ${S3_SUBFOLDER:-<root>}
 Schedule       : $SCHEDULE_TYPE (interval=${RUN_INTERVAL}s)
+Kolibri facility: ${KOLIBRI_FACILITY_ID:-<default facility>}
 Config file    : $CONFIG_FILE
 EOF
 )
@@ -245,6 +249,7 @@ S3_BUCKET="$S3_BUCKET"
 S3_SUBFOLDER="$S3_SUBFOLDER"
 SCHEDULE_TYPE="$SCHEDULE_TYPE"
 RUN_INTERVAL="$RUN_INTERVAL"
+KOLIBRI_FACILITY_ID="$KOLIBRI_FACILITY_ID"
 EOF
 mv -f "$tmp" "$CONFIG_FILE"
 sudo chown "${SERVICE_USER}:${SERVICE_GROUP}" "$CONFIG_FILE"
@@ -312,6 +317,7 @@ sudo mkdir -p "$DROP_DIR"
     daily)   echo "OnCalendar=daily"   ;;
     weekly)  echo "OnCalendar=weekly"  ;;
     monthly) echo "OnCalendar=monthly" ;;
+    yearly)  echo "OnCalendar=yearly"  ;;
     custom)  echo "OnUnitActiveSec=${RUN_INTERVAL}" ;;
   esac
   echo "Persistent=true"
@@ -321,4 +327,3 @@ sudo systemctl enable "$TIMER" >/dev/null
 sudo systemctl restart "$TIMER"
 say "⏱  Timer updated and started: $TIMER"
 say "✅ Configuration complete."
-

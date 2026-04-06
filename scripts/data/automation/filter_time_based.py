@@ -1,78 +1,44 @@
 #!/usr/bin/env python3
 
-import sys
-import os
 import csv
-from datetime import datetime, timedelta, time
+import os
+import sys
+from datetime import datetime
 
-def process_time_based_csv(folder, location, schedule_type):
+from time_window import build_filename, compute_window
+
+
+def process_time_based_csv(folder, location, schedule_type, run_interval_seconds=None):
     """
-    Filters a summary.csv file for the last *completed* time interval (hour, day, week)
-    and renames the output file according to the specified naming convention.
-    Prints the final filename to stdout on success.
+    Filters summary.csv for the last completed interval and prints the final filename on success.
     """
     input_path = os.path.join(folder, "summary.csv")
     temp_output_path = os.path.join(folder, "temp_filtered.csv")
-    
+
     if not os.path.exists(input_path):
         sys.stderr.write(f"Error: summary.csv not found in {folder}\n")
         sys.exit(1)
 
-    now = datetime.now()
-    start_time = None
-    end_time = None
-    file_timestamp_dt = None
-
-    if schedule_type == "hourly":
-        # Target the previous hour
-        target_hour_dt = now - timedelta(hours=1)
-        start_time = target_hour_dt.replace(minute=0, second=0, microsecond=0)
-        end_time = start_time.replace(minute=59, second=59, microsecond=999999)
-        file_timestamp_dt = target_hour_dt
-        file_timestamp = file_timestamp_dt.strftime("%H_%d_%m_%Y")
-        output_filename = f"{location}_{file_timestamp}_access_logs.csv"
-        log_period = f"{start_time.strftime('%Y-%m-%d %H:00')} to {end_time.strftime('%H:59')}"
-        sys.stderr.write(f"📊 Filtering logs for: {log_period}\n")
-
-    elif schedule_type == "daily":
-        # Target yesterday
-        yesterday_dt = now - timedelta(days=1)
-        start_time = datetime.combine(yesterday_dt.date(), time.min)
-        end_time = datetime.combine(yesterday_dt.date(), time.max)
-        file_timestamp_dt = yesterday_dt
-        file_timestamp = file_timestamp_dt.strftime("%d_%m_%Y")
-        output_filename = f"{location}_{file_timestamp}_access_logs.csv"
-        log_period = f"{start_time.strftime('%Y-%m-%d')} (entire day)"
-        sys.stderr.write(f"📊 Filtering logs for: {log_period}\n")
-
-    elif schedule_type == "weekly":
-        # Target the previous full week (last Monday to last Sunday)
-        today = now.date()
-        start_of_this_week = today - timedelta(days=today.weekday())
-        start_of_last_week = start_of_this_week - timedelta(weeks=1)
-        end_of_last_week = start_of_last_week + timedelta(days=6)
-        
-        start_time = datetime.combine(start_of_last_week, time.min)
-        end_time = datetime.combine(end_of_last_week, time.max)
-        file_timestamp_dt = start_of_last_week
-        # Use the week number (and year) of the processed week for the filename
-        file_timestamp = file_timestamp_dt.strftime("%W_%m_%Y")
-        output_filename = f"{location}_{file_timestamp}_access_logs.csv"
-        log_period = f"Week {start_of_last_week.strftime('%W')} ({start_time.strftime('%Y-%m-%d')} to {end_of_last_week.strftime('%Y-%m-%d')})"
-        sys.stderr.write(f"📊 Filtering logs for: {log_period}\n")
-        
-    else:
-        sys.stderr.write(f"Error: Invalid schedule type '{schedule_type}' provided.\n")
+    try:
+        window = compute_window(schedule_type, run_interval_seconds=run_interval_seconds)
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
         sys.exit(1)
+
+    start_time = window.start
+    end_time = window.end
+    output_filename = build_filename(location, schedule_type, "access_logs", window=window)
+
+    sys.stderr.write(f"Filtering logs for: {window.label}\n")
 
     final_output_path = os.path.join(folder, output_filename)
     rows_written = 0
 
     try:
-        with open(input_path, 'r', newline='', encoding='utf-8') as infile, \
-             open(temp_output_path, 'w', newline='', encoding='utf-8') as outfile:
-
-            reader = csv.reader((line.replace('\0', '') for line in infile))
+        with open(input_path, "r", newline="", encoding="utf-8") as infile, open(
+            temp_output_path, "w", newline="", encoding="utf-8"
+        ) as outfile:
+            reader = csv.reader((line.replace("\0", "") for line in infile))
             writer = csv.writer(outfile)
 
             try:
@@ -84,48 +50,48 @@ def process_time_based_csv(folder, location, schedule_type):
             for row in reader:
                 try:
                     row_date_str = row[1]
-                    
-                    # Try to parse time if it exists in column 2 (Access Time)
-                    row_time_str = None
                     if len(row) > 2 and row[2]:
                         try:
                             row_time_str = row[2]
-                            # Parse datetime with time
-                            date_time_obj = datetime.strptime(f"{row_date_str} {row_time_str}", '%Y-%m-%d %H:%M:%S')
+                            date_time_obj = datetime.strptime(
+                                f"{row_date_str} {row_time_str}", "%Y-%m-%d %H:%M:%S"
+                            )
                         except (ValueError, IndexError):
-                            # No time available, use date only
-                            date_time_obj = datetime.strptime(row_date_str, '%Y-%m-%d')
+                            date_time_obj = datetime.strptime(row_date_str, "%Y-%m-%d")
                     else:
-                        # No time column, use date only
-                        date_time_obj = datetime.strptime(row_date_str, '%Y-%m-%d')
-                    
-                    # Check if the log entry's timestamp is within the target window
+                        date_time_obj = datetime.strptime(row_date_str, "%Y-%m-%d")
+
                     if start_time <= date_time_obj <= end_time:
                         writer.writerow(row)
                         rows_written += 1
-                except (ValueError, IndexError) as e:
+                except (ValueError, IndexError):
                     continue
-
-    except Exception as e:
-        sys.stderr.write(f"An error occurred during CSV processing: {e}\n")
+    except Exception as exc:
+        sys.stderr.write(f"An error occurred during CSV processing: {exc}\n")
         sys.exit(1)
 
     if rows_written > 0:
         os.rename(temp_output_path, final_output_path)
-        sys.stderr.write(f"✅ Found {rows_written} log entries for uploading\n")
+        sys.stderr.write(f"Found {rows_written} log entries for uploading\n")
         print(output_filename)
     else:
         os.remove(temp_output_path)
-        sys.stderr.write(f"⚠️  No log entries found for this period\n")
+        sys.stderr.write("No log entries found for this period\n")
+
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        sys.stderr.write("Usage: python filter_time_based.py <folder_path> <device_location> <schedule_type>\n")
+    if len(sys.argv) not in (4, 5):
+        sys.stderr.write(
+            "Usage: python filter_time_based.py <folder_path> <device_location> <schedule_type> [run_interval_seconds]\n"
+        )
         sys.exit(1)
 
-    folder_path = sys.argv[1]
-    device_location = sys.argv[2]
-    schedule = sys.argv[3]
-    
-    process_time_based_csv(folder_path, device_location, schedule)
+    run_interval_seconds = None
+    if len(sys.argv) == 5 and sys.argv[4]:
+        try:
+            run_interval_seconds = int(sys.argv[4])
+        except ValueError:
+            sys.stderr.write("Error: run_interval_seconds must be an integer.\n")
+            sys.exit(1)
 
+    process_time_based_csv(sys.argv[1], sys.argv[2], sys.argv[3], run_interval_seconds=run_interval_seconds)
