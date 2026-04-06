@@ -46,6 +46,7 @@ PYTHON_SCRIPT="${PYTHON_SCRIPT:-oc4d}"
 S3_BUCKET="${S3_BUCKET:-s3://example-bucket}"
 S3_SUBFOLDER="${S3_SUBFOLDER:-}"
 SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
+RUN_INTERVAL="${RUN_INTERVAL:-86400}"
 KOLIBRI_FACILITY_ID="${KOLIBRI_FACILITY_ID:-}"
 
 DATA_DIR="$PROJECT_ROOT/00_DATA"
@@ -132,16 +133,9 @@ if [[ ! -s "$SUMMARY" ]]; then
   log "[info] No new data in summary.csv. Skipping RACHEL upload for this run."
 else
   case "$SCHEDULE_TYPE" in
-    hourly|daily|weekly)
+    hourly|daily|weekly|monthly|yearly|custom)
       log "[filter] Schedule '$SCHEDULE_TYPE'"
-      FINAL_CSV_BASENAME="$(python3 "scripts/data/automation/filter_time_based.py" "$PROCESSED_DIR" "$DEVICE_LOCATION" "$SCHEDULE_TYPE")"
-      if [[ -n "$FINAL_CSV_BASENAME" ]]; then
-        FINAL_CSV="$PROCESSED_DIR/$FINAL_CSV_BASENAME"
-      fi
-      ;;
-    monthly)
-      log "[filter] Schedule 'monthly'"
-      FINAL_CSV_BASENAME="$(python3 scripts/data/upload/process_csv.py "$PROCESSED_DIR" "$DEVICE_LOCATION" "0" "summary.csv" "filename")"
+      FINAL_CSV_BASENAME="$(python3 "scripts/data/automation/filter_time_based.py" "$PROCESSED_DIR" "$DEVICE_LOCATION" "$SCHEDULE_TYPE" "$RUN_INTERVAL")"
       if [[ -n "$FINAL_CSV_BASENAME" ]]; then
         FINAL_CSV="$PROCESSED_DIR/$FINAL_CSV_BASENAME"
       fi
@@ -184,23 +178,32 @@ fi
 OVERALL_FAIL=0
 
 if kolibri_is_available; then
-  KOLIBRI_FILE="$KOLIBRI_EXPORT_DIR/$(kolibri_export_filename "$DEVICE_LOCATION")"
-  if kolibri_export_summary "$KOLIBRI_FILE" "$KOLIBRI_FACILITY_ID"; then
-    if ! kolibri_has_data_rows "$KOLIBRI_FILE"; then
-      log "[info] Kolibri summary contains only the header row; uploading it anyway to preserve the snapshot."
-    fi
+  if ! WINDOW_EXPORTS="$(kolibri_schedule_window "$SCHEDULE_TYPE" "$DEVICE_LOCATION" "$RUN_INTERVAL")"; then
+    log "[error] Unable to resolve the Kolibri window for schedule '$SCHEDULE_TYPE'."
+    OVERALL_FAIL=1
+  else
+    eval "$WINDOW_EXPORTS"
+    KOLIBRI_FILE="$KOLIBRI_EXPORT_DIR/$WINDOW_FILENAME"
 
-    if (( ONLINE )); then
-      if ! upload_one "$KOLIBRI_FILE" "Kolibri"; then
-        log "[warn] Kolibri upload failed; queueing the export."
+    log "[kolibri] Schedule '$SCHEDULE_TYPE' uses window: $WINDOW_LABEL"
+
+    if kolibri_export_summary "$KOLIBRI_FILE" "$KOLIBRI_FACILITY_ID" "$WINDOW_START_DATE" "$WINDOW_END_DATE"; then
+      if ! kolibri_has_data_rows "$KOLIBRI_FILE"; then
+        log "[info] Kolibri summary contains only the header row; uploading it anyway to preserve the snapshot."
+      fi
+
+      if (( ONLINE )); then
+        if ! upload_one "$KOLIBRI_FILE" "Kolibri"; then
+          log "[warn] Kolibri upload failed; queueing the export."
+          queue_one "$KOLIBRI_FILE" "$QUEUE_DIR" "Kolibri"
+        fi
+      else
         queue_one "$KOLIBRI_FILE" "$QUEUE_DIR" "Kolibri"
       fi
     else
-      queue_one "$KOLIBRI_FILE" "$QUEUE_DIR" "Kolibri"
+      log "[error] Kolibri summary export failed."
+      OVERALL_FAIL=1
     fi
-  else
-    log "[error] Kolibri summary export failed."
-    OVERALL_FAIL=1
   fi
 else
   log "[info] Kolibri CLI not installed on this device. Skipping Kolibri summary export."

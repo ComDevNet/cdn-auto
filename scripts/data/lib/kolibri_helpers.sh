@@ -33,10 +33,72 @@ kolibri_resolve_facility_id() {
   echo "$resolved"
 }
 
-kolibri_export_filename() {
-  local device_location="${1:-kolibri}"
-  local timestamp="${2:-$(date '+%Y_%m_%d_%H%M%S')}"
-  echo "${device_location}_kolibri_summary_${timestamp}.csv"
+kolibri_schedule_window() {
+  local schedule_type="$1"
+  local device_location="$2"
+  local run_interval="${3:-}"
+
+  if [[ -z "${PROJECT_ROOT:-}" ]]; then
+    kolibri_log "[error] PROJECT_ROOT is not set; cannot resolve Kolibri time window."
+    return 1
+  fi
+
+  if [[ -n "$run_interval" ]]; then
+    python3 "$PROJECT_ROOT/scripts/data/automation/time_window.py" "$schedule_type" "$device_location" "kolibri_summary" "$run_interval"
+  else
+    python3 "$PROJECT_ROOT/scripts/data/automation/time_window.py" "$schedule_type" "$device_location" "kolibri_summary"
+  fi
+}
+
+kolibri_is_valid_date() {
+  local candidate="$1"
+  date -d "$candidate" '+%Y-%m-%d' >/dev/null 2>&1
+}
+
+kolibri_manual_range_filename() {
+  local device_location="$1"
+  local start_date="$2"
+  local end_date="$3"
+
+  local file_stamp=""
+  local month_start=""
+  local month_end=""
+  local year_start=""
+  local year_end=""
+  local expected_week_end=""
+
+  if [[ "$start_date" == "$end_date" ]]; then
+    file_stamp="$(date -d "$start_date" '+%d_%m_%Y')"
+    echo "${device_location}_${file_stamp}_kolibri_summary.csv"
+    return 0
+  fi
+
+  month_start="$(date -d "$start_date" '+%Y-%m-01')"
+  month_end="$(date -d "$month_start +1 month -1 day" '+%Y-%m-%d')"
+  if [[ "$start_date" == "$month_start" && "$end_date" == "$month_end" ]]; then
+    file_stamp="$(date -d "$start_date" '+%m_%Y')"
+    echo "${device_location}_${file_stamp}_kolibri_summary.csv"
+    return 0
+  fi
+
+  year_start="$(date -d "$start_date" '+%Y-01-01')"
+  year_end="$(date -d "$year_start +1 year -1 day" '+%Y-%m-%d')"
+  if [[ "$start_date" == "$year_start" && "$end_date" == "$year_end" ]]; then
+    file_stamp="$(date -d "$start_date" '+%Y')"
+    echo "${device_location}_${file_stamp}_kolibri_summary.csv"
+    return 0
+  fi
+
+  expected_week_end="$(date -d "$start_date +6 day" '+%Y-%m-%d')"
+  if [[ "$(date -d "$start_date" '+%u')" == "1" && "$(date -d "$end_date" '+%u')" == "7" && "$end_date" == "$expected_week_end" ]]; then
+    file_stamp="$(date -d "$start_date" '+%W_%m_%Y')"
+    echo "${device_location}_${file_stamp}_kolibri_summary.csv"
+    return 0
+  fi
+
+  local start_stamp="${start_date//-/}"
+  local end_stamp="${end_date//-/}"
+  echo "${device_location}_${start_stamp}_to_${end_stamp}_kolibri_summary.csv"
 }
 
 kolibri_export_summary() {
@@ -58,6 +120,7 @@ kolibri_export_summary() {
     kolibri_log "[kolibri] Exporting summary for Kolibri's default facility"
   fi
 
+  kolibri_log "[kolibri] Export window: $start_date to $end_date"
   kolibri "${args[@]}"
 }
 
