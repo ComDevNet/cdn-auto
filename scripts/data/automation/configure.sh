@@ -179,16 +179,29 @@ pick_bucket
 pick_subfolder(){
   local bucket_name="${S3_BUCKET#s3://}"; bucket_name="${bucket_name%%/*}"
   local opts=( "NONE" "<bucket root>" "CUSTOM" "Enter subfolder manually" )
+  local prefixes=()
   local out rc
   out="$(aws_capture s3api list-objects-v2 --bucket "$bucket_name" --delimiter '/' --query 'CommonPrefixes[].Prefix' --output text 2>&1)"; rc=$?
   if (( rc == 0 )) && [[ -n "$out" && "$out" != "None" ]]; then
-    while IFS= read -r p; do p="${p%/}"; [[ -n "$p" ]] && opts+=( "$p" "$p" ); done < <(printf '%s' "$out" | tr '\t' '\n' | sed '/^ *$/d')
+    while IFS= read -r p; do
+      p="${p%/}"
+      [[ -n "$p" ]] && prefixes+=( "$p" )
+    done < <(printf '%s' "$out" | tr '\t' '\n' | sed '/^ *$/d')
   else
     out="$(aws_capture s3 ls "s3://$bucket_name/" 2>&1 || true)"
     while IFS= read -r line; do
-      if [[ "$line" == PRE* ]]; then p="$(echo "$line" | awk '{print $2}' | sed 's:/$::')"; [[ -n "$p" ]] && opts+=( "$p" "$p" ); fi
+      if [[ "$line" == PRE* ]]; then
+        p="$(echo "$line" | awk '{print $2}' | sed 's:/$::')"
+        [[ -n "$p" ]] && prefixes+=( "$p" )
+      fi
     done <<< "$out"
   fi
+  if [[ -n "$S3_SUBFOLDER" ]]; then
+    prefixes+=( "$(sanitize_subfolder "$S3_SUBFOLDER")" )
+  fi
+  while IFS= read -r p; do
+    [[ -n "$p" ]] && opts+=( "$p" "$p" )
+  done < <(printf '%s\n' "${prefixes[@]}" | sed '/^$/d' | sort -fu)
   choice="$(menu_select_cancelable "Select S3 subfolder in s3://$bucket_name/" 20 74 12 "${opts[@]}")"
   [[ "$choice" == "__EXIT__" ]] && exit 2
   case "$choice" in
