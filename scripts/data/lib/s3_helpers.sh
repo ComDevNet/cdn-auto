@@ -58,7 +58,11 @@ upload_one() {
   local rc
 
   remote_base="$(remote_base_path)"
-  remote_path="$(join_path "$remote_base" "$folder_name/$(basename "$file_path")")"
+  if [[ "$folder_name" == "RACHEL" && -n "${RACHEL_SUBFOLDER:-}" ]]; then
+    remote_path="$(join_path "$remote_base" "$folder_name/${RACHEL_SUBFOLDER}/$(basename "$file_path")")"
+  else
+    remote_path="$(join_path "$remote_base" "$folder_name/$(basename "$file_path")")"
+  fi
 
   log "[upload] $(basename "$file_path") -> $remote_path"
   output="$(aws_cp_region "$file_path" "$remote_path" 2>&1)"

@@ -38,6 +38,7 @@ Written by `configure.sh` and kept inside the repo so the automation can run fro
 - `DEVICE_LOCATION`: short label used in folder names and output filenames
 - `S3_BUCKET`: `s3://bucket-name`
 - `S3_SUBFOLDER`: optional prefix under the bucket
+- `RACHEL_SUBFOLDER`: optional subfolder under `.../RACHEL/` (for per-student server feeds)
 - `KOLIBRI_FACILITY_ID`: optional override; if omitted, Kolibri's default facility is used
 - `SCHEDULE_TYPE`: `hourly` (Castle only), `daily`, `weekly`, `monthly`, or `custom`
 - `RUN_INTERVAL`: for custom schedules (seconds, `>= 300`)
@@ -60,6 +61,7 @@ Data flow
 - Hourly, daily, and weekly runs use `filter_time_based.py`
 - Monthly runs use `scripts/data/upload/process_csv.py`
 - If online, queued `RACHEL/` files are flushed before the new CSV uploads
+- If `RACHEL_SUBFOLDER` is set, uploads go to `.../RACHEL/<RACHEL_SUBFOLDER>/`
 - If offline, the file is copied into `00_DATA/00_UPLOAD_QUEUE/RACHEL/`
 
 4. Export + Upload `Kolibri/`

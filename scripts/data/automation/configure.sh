@@ -101,6 +101,7 @@ DEVICE_LOCATION="${DEVICE_LOCATION:-device}"
 PYTHON_SCRIPT="${PYTHON_SCRIPT:-oc4d}"
 S3_BUCKET="${S3_BUCKET:-s3://example-bucket}"
 S3_SUBFOLDER="${S3_SUBFOLDER:-}"
+RACHEL_SUBFOLDER="${RACHEL_SUBFOLDER:-}"
 SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
 KOLIBRI_FACILITY_ID="${KOLIBRI_FACILITY_ID:-}"
@@ -213,6 +214,37 @@ pick_subfolder(){
 pick_subfolder
 S3_SUBFOLDER="$(sanitize_subfolder "$S3_SUBFOLDER")"
 
+pick_rachel_subfolder(){
+  local bucket_name="${S3_BUCKET#s3://}"; bucket_name="${bucket_name%%/*}"
+  local rachel_base="${S3_SUBFOLDER:+${S3_SUBFOLDER}/}RACHEL/"
+  local opts=( "NONE" "<RACHEL root>" "CUSTOM" "Enter RACHEL subfolder manually" )
+  local prefixes=()
+  local out rc
+  out="$(aws_capture s3api list-objects-v2 --bucket "$bucket_name" --prefix "$rachel_base" --delimiter '/' --query 'CommonPrefixes[].Prefix' --output text 2>&1)"; rc=$?
+  if (( rc == 0 )) && [[ -n "$out" && "$out" != "None" ]]; then
+    while IFS= read -r p; do
+      p="${p#${rachel_base}}"
+      p="${p%/}"
+      [[ -n "$p" ]] && prefixes+=( "$p" )
+    done < <(printf '%s' "$out" | tr '\t' '\n' | sed '/^ *$/d')
+  fi
+  if [[ -n "$RACHEL_SUBFOLDER" ]]; then
+    prefixes+=( "$(sanitize_subfolder "$RACHEL_SUBFOLDER")" )
+  fi
+  while IFS= read -r p; do
+    [[ -n "$p" ]] && opts+=( "$p" "$p" )
+  done < <(printf '%s\n' "${prefixes[@]}" | sed '/^$/d' | sort -fu)
+  choice="$(menu_select_cancelable "Select RACHEL subfolder in s3://$bucket_name/$rachel_base" 20 74 12 "${opts[@]}")"
+  [[ "$choice" == "__EXIT__" ]] && exit 2
+  case "$choice" in
+    NONE) RACHEL_SUBFOLDER="" ;;
+    CUSTOM) prompt_text "RACHEL subfolder (no leading slash; empty for RACHEL root)" "${RACHEL_SUBFOLDER}" RACHEL_SUBFOLDER; RACHEL_SUBFOLDER="$(sanitize_subfolder "$RACHEL_SUBFOLDER")" ;;
+    *) RACHEL_SUBFOLDER="$choice" ;;
+  esac
+}
+pick_rachel_subfolder
+RACHEL_SUBFOLDER="$(sanitize_subfolder "$RACHEL_SUBFOLDER")"
+
 # --- Dynamic Schedule Menu ---
 sched_opts=(
   daily   "Once per day"
@@ -243,6 +275,7 @@ Logs flavor    : $PYTHON_SCRIPT
 Device location: $DEVICE_LOCATION
 S3 bucket      : $S3_BUCKET
 S3 subfolder   : ${S3_SUBFOLDER:-<root>}
+RACHEL subfolder: ${RACHEL_SUBFOLDER:-<RACHEL root>}
 Schedule       : $SCHEDULE_TYPE (interval=${RUN_INTERVAL}s)
 Kolibri facility: ${KOLIBRI_FACILITY_ID:-<default facility>}
 Config file    : $CONFIG_FILE
@@ -260,6 +293,7 @@ DEVICE_LOCATION="$DEVICE_LOCATION"
 PYTHON_SCRIPT="$PYTHON_SCRIPT"
 S3_BUCKET="$S3_BUCKET"
 S3_SUBFOLDER="$S3_SUBFOLDER"
+RACHEL_SUBFOLDER="$RACHEL_SUBFOLDER"
 SCHEDULE_TYPE="$SCHEDULE_TYPE"
 RUN_INTERVAL="$RUN_INTERVAL"
 KOLIBRI_FACILITY_ID="$KOLIBRI_FACILITY_ID"
