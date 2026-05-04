@@ -10,9 +10,9 @@ def process_log_file(file_path):
     """Process a single log file and extract data."""
     log_data = []
 
-    # New regex: optional second "- " before the "[" 
+    # New regex: optional "user=..." segment, optional second "- " before the "["
     log_pattern = re.compile(
-        r'(?P<ip>[\d.:]+)\s-\s(?:-\s)?\['
+        r'(?P<ip>[\d.:]+)\s(?:user=(?P<user>\S+)\s)?-\s(?:-\s)?\['
         r'(?P<timestamp>[^\]]+)\]\s"'
         r'(?P<request>GET|POST)\s'
         r'(?P<path>[^\s]+)\sHTTP/1\.1"\s'
@@ -49,6 +49,10 @@ def process_log_file(file_path):
                     # e.g. 2025-01-28 12:34:56.789
                     timestamp = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S.%f")
                 access_date = timestamp.strftime("%Y-%m-%d")
+                access_time = timestamp.strftime("%H:%M:%S")
+
+                # User (defaults to anonymous if not present in log line)
+                user = g.get("user") or "anonymous"
 
                 # Module name (for v6, extract from path like /uploads/modules/[id]/[module-name] or /uploads/other-modules/[module-name])
                 path = g["path"]
@@ -81,6 +85,8 @@ def process_log_file(file_path):
                 log_data.append([
                     ip,
                     access_date,
+                    access_time,
+                    user,
                     module,
                     g["status_code"],
                     size_gb,
@@ -107,6 +113,8 @@ def save_processed_log_file(folder_path, file_path, log_data):
             csv_writer.writerow([
                 'IP Address',
                 'Access Date',
+                'Access Time',
+                'User',
                 'Module Viewed',
                 'Status Code',
                 'Data Saved (GB)',
@@ -126,6 +134,8 @@ def create_master_csv(folder_path):
         csv_writer.writerow([
             'IP Address',
             'Access Date',
+            'Access Time',
+            'User',
             'Module Viewed',
             'Status Code',
             'Data Saved (GB)',
