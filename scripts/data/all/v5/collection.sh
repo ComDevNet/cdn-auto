@@ -12,11 +12,7 @@ mkdir -p "$new_folder"
 echo "Collecting ModuleGaze logs from $log_directory..."
 find "$log_directory" -type f \
     \( \
-        -name "modulegaze-access.log" \
-        -o \
         -name "modulegaze-sessions.log" \
-        -o \
-        -name "modulegaze-access-*.log.zip" \
         -o \
         -name "modulegaze-sessions-*.log.zip" \
     \) \

@@ -21,7 +21,7 @@ Inner workings
 - upload.sh lists processed run folders under 00_DATA/00_PROCESSED and uploads to `RACHEL/`
 - modulegaze.sh lists ModuleGaze processed folders and uploads to `ModuleGaze/`
 - Both scripts make a working copy of summary.csv, filter it by month, and create deterministic filenames
-- process_csv.py finds the Access Date column by header name, so it supports the normal RACHEL schemas and the ModuleGaze combined schema
+- process_csv.py finds the Access Date column by header name, so it supports the normal RACHEL schemas and the ModuleGaze session schema
 
 Error modes
 

@@ -2,42 +2,19 @@
 
 import csv
 import os
-import re
 import sys
 import zipfile
 from datetime import datetime
-from urllib.parse import unquote, urlsplit
-
-from user_agents import parse
 
 
 HEADER = [
-    "Log Type",
+    "User",
+    "Access Time",
     "IP Address",
     "Access Date",
-    "Access Time",
-    "User",
     "Module Viewed",
-    "Status Code",
-    "Data Saved (GB)",
-    "Device Used",
-    "Browser Used",
     "Duration Seconds",
-    "Schema Version",
-    "Source Log",
 ]
-
-ACCESS_PATTERN = re.compile(
-    r"(?P<ip>(?:\d{1,3}\.){3}\d{1,3}|::ffff:(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:.]+)"
-    r"\s+(?:user=(?P<user>\S+)\s+)?-\s(?:-\s)?\["
-    r"(?P<timestamp>[^\]]+)\]\s\""
-    r"(?P<request>GET|POST|HEAD|PUT|DELETE|OPTIONS)\s"
-    r"(?P<path>[^\s]+)\sHTTP/[0-9.]+\"\s"
-    r"(?P<status_code>\d+|-)\s"
-    r"(?P<size>\d+|-)\s"
-    r"\"(?P<referrer>[^\"]*)\"\s"
-    r"\"(?P<user_agent>[^\"]*)\""
-)
 
 
 def parse_timestamp(value):
@@ -57,28 +34,6 @@ def parse_timestamp(value):
         except ValueError:
             continue
     raise ValueError(f"Unsupported timestamp: {value}")
-
-
-def module_from_path(path):
-    clean_path = unquote(urlsplit(path).path)
-    patterns = [
-        "/uploads/modules/",
-        "/modules/",
-        "/uploads/other-modules/",
-    ]
-
-    for marker in patterns:
-        if marker not in clean_path:
-            continue
-        parts = [part for part in clean_path.split(marker, 1)[1].split("/") if part]
-        if marker == "/uploads/other-modules/":
-            return parts[0] if parts else "none"
-        if len(parts) >= 2:
-            return parts[1]
-        if parts:
-            return parts[0]
-
-    return "none"
 
 
 def normalize_ip(ip):
@@ -102,41 +57,7 @@ def iter_text_lines(file_path):
         yield from handle
 
 
-def parse_access_line(line, source_log):
-    # Active modulegaze logs prepend an ingest timestamp and a tab before the
-    # original oc4d journal line. Archived logs may contain either shape.
-    message = line.rstrip("\n")
-    if "\t" in message:
-        message = message.split("\t", 1)[1]
-
-    match = ACCESS_PATTERN.search(message)
-    if not match:
-        return None
-
-    values = match.groupdict()
-    timestamp = parse_timestamp(values["timestamp"])
-    user_agent = parse(values["user_agent"])
-    raw_size = values["size"]
-    size_bytes = int(raw_size) if raw_size.isdigit() else 0
-
-    return [
-        "access",
-        normalize_ip(values["ip"]),
-        timestamp.strftime("%Y-%m-%d"),
-        timestamp.strftime("%H:%M:%S"),
-        values.get("user") or "Guest",
-        module_from_path(values["path"]),
-        values["status_code"],
-        f"{size_bytes / 1073741824:.10f}",
-        user_agent.os.family or "unknown",
-        user_agent.browser.family or "unknown",
-        "",
-        "",
-        source_log,
-    ]
-
-
-def parse_session_line(line, source_log):
+def parse_session_line(line):
     parts = line.strip().split("\t")
     if len(parts) < 4:
         return None
@@ -158,19 +79,12 @@ def parse_session_line(line, source_log):
         user_id, ip = user_id.rsplit("|", 1)
 
     return [
-        "session",
+        user_id or "Guest",
+        timestamp.strftime("%H:%M:%S"),
         normalize_ip(ip),
         timestamp.strftime("%Y-%m-%d"),
-        timestamp.strftime("%H:%M:%S"),
-        user_id or "Guest",
         fields.get("moduleId", "none"),
-        "",
-        "",
-        "",
-        "",
         fields.get("durationSeconds", ""),
-        fields.get("schemaVersion", ""),
-        source_log,
     ]
 
 
@@ -178,15 +92,10 @@ def process_log_file(file_path):
     log_data = []
     skipped_count = 0
     source_log = os.path.basename(file_path)
-    is_session_log = "sessions" in source_log
 
     for line in iter_text_lines(file_path):
         try:
-            row = (
-                parse_session_line(line, source_log)
-                if is_session_log
-                else parse_access_line(line, source_log)
-            )
+            row = parse_session_line(line)
             if row:
                 log_data.append(row)
             else:
@@ -198,6 +107,15 @@ def process_log_file(file_path):
 
     print(f"Processed {source_log}: {len(log_data)} rows, {skipped_count} skipped")
     return log_data
+
+
+def clear_csv_outputs(folder_path):
+    if not os.path.isdir(folder_path):
+        return
+    for root, _, files in os.walk(folder_path):
+        for file in files:
+            if file.endswith(".csv"):
+                os.remove(os.path.join(root, file))
 
 
 def save_processed_log_file(folder_path, file_path, log_data):
@@ -232,10 +150,13 @@ def create_master_csv(folder_path):
 
 def is_processable(file_name):
     return (
+        file_name == "modulegaze-sessions.log"
+        or file_name.startswith("modulegaze-sessions-")
+    ) and (
         file_name.endswith(".log")
         or file_name.endswith(".log.zip")
         or file_name.endswith(".zip")
-    ) and file_name.startswith("modulegaze-")
+    )
 
 
 if __name__ == "__main__":
@@ -253,9 +174,11 @@ if __name__ == "__main__":
             if is_processable(file):
                 files_to_process.append(os.path.join(root, file))
 
+    clear_csv_outputs(processed_folder_path)
+
     total_files = len(files_to_process)
     if total_files == 0:
-        print(f"No ModuleGaze log files found in {folder_path}.")
+        print(f"No ModuleGaze session log files found in {folder_path}.")
 
     for index, file_path in enumerate(sorted(files_to_process), start=1):
         log_data = process_log_file(file_path)
@@ -263,4 +186,4 @@ if __name__ == "__main__":
         print(f"Processing files: {index}/{total_files}")
 
     create_master_csv(processed_folder_path)
-    print("Processing completed. All ModuleGaze log files have been processed.")
+    print("Processing completed. All ModuleGaze session log files have been processed.")

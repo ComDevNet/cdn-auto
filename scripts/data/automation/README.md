@@ -1,6 +1,6 @@
 # Automation (Log Processor)
 
-This module installs and runs the end-to-end data pipeline on a schedule: collect logs, process to CSV, time-window filter, upload to S3 (or queue if offline), export Kolibri summary snapshots to the `Kolibri/` S3 prefix, and collect/upload ModuleGaze logs to the `ModuleGaze/` S3 prefix when `/var/log/modulegaze` exists.
+This module installs and runs the end-to-end data pipeline on a schedule: collect logs, process to CSV, time-window filter, upload to S3 (or queue if offline), export Kolibri summary snapshots to the `Kolibri/` S3 prefix, and collect/upload ModuleGaze session logs to the `ModuleGaze/` S3 prefix when `/var/log/modulegaze` exists.
 
 Why systemd?
 
@@ -11,7 +11,7 @@ Key features
 - Scheduled runs via systemd timer (daily, weekly, monthly, custom, and hourly for Castle logs)
 - Offline-first uploads with queue flushing on the next successful run
 - Shared S3 destination logic for `RACHEL/`, `Kolibri/`, and `ModuleGaze/`
-- ModuleGaze access/session log export from active `.log` files and daily `.log.zip` archives
+- ModuleGaze session log export from active `.log` files and daily `.log.zip` archives
 - Kolibri summary exports using the supported `kolibri manage exportlogs -l summary` CLI
 - Built-in workaround for Kolibri `0.19.2`, which crashes if `start_date` and `end_date` are omitted
 - Guided configuration with AWS bucket discovery and a live test upload
@@ -64,8 +64,8 @@ Data flow
 
 3. Process and upload `ModuleGaze/`
 
-- When enabled and `/var/log/modulegaze` exists, copies `modulegaze-access*` and `modulegaze-sessions*` logs into `00_DATA/LOCATION_modulegaze_logs_YYYY_MM_DD`
-- Processes access rows and session-duration rows into one `summary.csv`
+- When enabled and `/var/log/modulegaze` exists, copies `modulegaze-sessions.log` and `modulegaze-sessions-*.log.zip` into `00_DATA/LOCATION_modulegaze_logs_YYYY_MM_DD`
+- Processes session-duration rows into one `summary.csv`
 - Filters the summary using the same schedule window
 - Uploads to `S3_BUCKET/S3_SUBFOLDER/ModuleGaze/`, or queues in `00_DATA/00_UPLOAD_QUEUE/ModuleGaze/`
 

@@ -80,14 +80,10 @@ elif [[ "$log_choice" == "4" ]]; then
     find "$log_directory" -type f -name "*.log" \
         -exec cp {} "$new_folder"/ \;
 elif [[ "$log_choice" == "5" ]]; then
-    # For ModuleGaze logs: Collect active logs and daily zip archives
+    # For ModuleGaze logs: Collect session logs and daily session zip archives
     find "$log_directory" -type f \
         \( \
-            -name "modulegaze-access.log" \
-            -o \
             -name "modulegaze-sessions.log" \
-            -o \
-            -name "modulegaze-access-*.log.zip" \
             -o \
             -name "modulegaze-sessions-*.log.zip" \
         \) \

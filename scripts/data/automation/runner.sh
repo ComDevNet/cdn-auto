@@ -198,10 +198,12 @@ process_modulegaze_logs() {
 
   log "[modulegaze][collect] $modulegaze_collect_dir"
   mkdir -p "$modulegaze_collect_dir"
+  find "$modulegaze_collect_dir" -maxdepth 1 -type f \( \
+    -name 'modulegaze-access*' -o \
+    -name 'modulegaze-sessions*' \
+  \) -delete
   find "$log_dir" -type f \( \
-    -name 'modulegaze-access.log' -o \
     -name 'modulegaze-sessions.log' -o \
-    -name 'modulegaze-access-*.log.zip' -o \
     -name 'modulegaze-sessions-*.log.zip' \
   \) -exec cp {} "$modulegaze_collect_dir"/ \;
 

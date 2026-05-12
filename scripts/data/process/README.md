@@ -23,7 +23,7 @@ CSV schemas
 - v5/castle.py: columns = [IP Address, Access Date, Access Time, Module Viewed, Location Viewed, Status Code, Data Saved (GB), Device Used, Browser Used]
 - v3/dhub.py: columns = [IP Address, Access Date, Module Viewed, Status Code, Data Saved (GB), Device Used, Browser Used]
 - v6/log-v6.py: columns = [IP Address, Access Date, Module Viewed, Status Code, Data Saved (GB), Device Used, Browser Used]
-- ModuleGaze/modulegaze.py: columns = [Log Type, IP Address, Access Date, Access Time, User, Module Viewed, Status Code, Data Saved (GB), Device Used, Browser Used, Duration Seconds, Schema Version, Source Log]
+- ModuleGaze/modulegaze.py: columns = [User, Access Time, IP Address, Access Date, Module Viewed, Duration Seconds]
 
 Notes & edge cases
 
@@ -32,7 +32,7 @@ Notes & edge cases
 - log-v6.py is similar to dhub.py but for logs stored in /var/log/oc4d folder with v6-*.log filename pattern
 - castle.py parses a more structured message; it logs regex and timestamp errors into error_log.txt in the processed folder and normalizes IPv6 ::ffff: prefix
 - All processors normalize sizes to gigabytes and parse user agents to OS family and browser family
-- ModuleGaze processing combines access rows and session-duration rows into one summary.csv so it can be filtered and uploaded as one monthly or scheduled CSV
+- ModuleGaze processing uses only session-duration rows from modulegaze-sessions logs so it can be filtered and uploaded as one monthly or scheduled CSV
 
 Usage
 

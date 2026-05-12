@@ -6,7 +6,7 @@ Collect server logs from:
 - v5 (OC4D) at /var/log/oc4d (oc4d-*.log, capecoastcastle-*.log, *.gz; excludes *exceptions*)
 - v3 (D-Hub) at /var/log/dhub (*.log)
 - v6 (Server v6) at /var/log/oc4d (v6-*.log; excludes *exceptions*)
-- ModuleGaze at /var/log/modulegaze (active modulegaze logs and daily .log.zip archives)
+- ModuleGaze at /var/log/modulegaze (active session log and daily session .log.zip archives)
 
 Outputs
 
@@ -27,5 +27,5 @@ Inner workings
 - v5 copies oc4d logs, Cape Coast Castle logs, and any *.gz files
 - v3 copies *.log files from /var/log/dhub
 - v6 copies v6-*.log files from /var/log/oc4d
-- ModuleGaze copies modulegaze-access/modulegaze-sessions active logs and daily zip archives from /var/log/modulegaze
+- ModuleGaze copies only modulegaze-sessions.log and modulegaze-sessions-*.log.zip from /var/log/modulegaze
 - The resulting folder is moved into 00_DATA for the processing stage
