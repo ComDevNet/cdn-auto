@@ -105,6 +105,7 @@ RACHEL_SUBFOLDER="${RACHEL_SUBFOLDER:-}"
 SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
 KOLIBRI_FACILITY_ID="${KOLIBRI_FACILITY_ID:-}"
+MODULEGAZE_ENABLED="${MODULEGAZE_ENABLED:-1}"
 
 ensure_preflight_ok || true
 
@@ -136,6 +137,12 @@ fi
 if [[ "$PYTHON_SCRIPT" != "cape_coast_d" && "$SCHEDULE_TYPE" == "hourly" ]]; then
   say "⚠️ Hourly schedule is only for Cape Coast Castle logs. Downgrading to daily."
   SCHEDULE_TYPE="daily"
+fi
+
+if confirm "Also collect/process/upload ModuleGaze logs when /var/log/modulegaze exists?"; then
+  MODULEGAZE_ENABLED="1"
+else
+  MODULEGAZE_ENABLED="0"
 fi
 
 while :; do
@@ -278,6 +285,7 @@ S3 subfolder   : ${S3_SUBFOLDER:-<root>}
 RACHEL subfolder: ${RACHEL_SUBFOLDER:-<RACHEL root>}
 Schedule       : $SCHEDULE_TYPE (interval=${RUN_INTERVAL}s)
 Kolibri facility: ${KOLIBRI_FACILITY_ID:-<default facility>}
+ModuleGaze     : $([[ "$MODULEGAZE_ENABLED" == "1" ]] && echo enabled || echo disabled)
 Config file    : $CONFIG_FILE
 EOF
 )
@@ -297,6 +305,7 @@ RACHEL_SUBFOLDER="$RACHEL_SUBFOLDER"
 SCHEDULE_TYPE="$SCHEDULE_TYPE"
 RUN_INTERVAL="$RUN_INTERVAL"
 KOLIBRI_FACILITY_ID="$KOLIBRI_FACILITY_ID"
+MODULEGAZE_ENABLED="$MODULEGAZE_ENABLED"
 EOF
 mv -f "$tmp" "$CONFIG_FILE"
 sudo chown "${SERVICE_USER}:${SERVICE_GROUP}" "$CONFIG_FILE"

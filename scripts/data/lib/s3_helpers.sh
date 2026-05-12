@@ -85,7 +85,7 @@ queue_dir_for_folder() {
 
 prepare_queue_dirs() {
   local queue_root="${1:?queue root required}"
-  mkdir -p "$queue_root" "$queue_root/RACHEL" "$queue_root/Kolibri"
+  mkdir -p "$queue_root" "$queue_root/RACHEL" "$queue_root/Kolibri" "$queue_root/ModuleGaze"
 }
 
 queue_one() {
@@ -136,6 +136,7 @@ flush_all_queues() {
   flush_queue_dir "$queue_root" "RACHEL" || failed=1
   flush_queue_dir "$queue_root/RACHEL" "RACHEL" || failed=1
   flush_queue_dir "$queue_root/Kolibri" "Kolibri" || failed=1
+  flush_queue_dir "$queue_root/ModuleGaze" "ModuleGaze" || failed=1
 
   return "$failed"
 }

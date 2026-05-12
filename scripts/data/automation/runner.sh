@@ -49,6 +49,7 @@ RACHEL_SUBFOLDER="${RACHEL_SUBFOLDER:-}"
 SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
 KOLIBRI_FACILITY_ID="${KOLIBRI_FACILITY_ID:-}"
+MODULEGAZE_ENABLED="${MODULEGAZE_ENABLED:-1}"
 
 DATA_DIR="$PROJECT_ROOT/00_DATA"
 PROCESSED_ROOT="$DATA_DIR/00_PROCESSED"
@@ -175,6 +176,73 @@ if [[ -n "$FINAL_CSV" ]]; then
     queue_one "$FINAL_CSV" "$QUEUE_DIR" "RACHEL"
   fi
 fi
+
+process_modulegaze_logs() {
+  if [[ "$MODULEGAZE_ENABLED" != "1" ]]; then
+    log "[modulegaze] Disabled in config. Skipping."
+    return 0
+  fi
+
+  local log_dir="/var/log/modulegaze"
+  if [[ ! -d "$log_dir" ]]; then
+    log "[modulegaze] $log_dir not found. Skipping."
+    return 0
+  fi
+
+  local modulegaze_folder="${DEVICE_LOCATION}_modulegaze_logs_${TODAY_YMD}"
+  local modulegaze_collect_dir="$DATA_DIR/$modulegaze_folder"
+  local modulegaze_processed_dir="$PROCESSED_ROOT/$modulegaze_folder"
+  local modulegaze_summary="$modulegaze_processed_dir/summary.csv"
+  local modulegaze_final_csv=""
+  local modulegaze_final_basename=""
+
+  log "[modulegaze][collect] $modulegaze_collect_dir"
+  mkdir -p "$modulegaze_collect_dir"
+  find "$modulegaze_collect_dir" -maxdepth 1 -type f \( \
+    -name 'modulegaze-access*' -o \
+    -name 'modulegaze-sessions*' \
+  \) -delete
+  find "$log_dir" -type f \( \
+    -name 'modulegaze-sessions.log' -o \
+    -name 'modulegaze-sessions-*.log.zip' \
+  \) -exec cp {} "$modulegaze_collect_dir"/ \;
+
+  if ! find "$modulegaze_collect_dir" -type f | grep -q .; then
+    log "[modulegaze] No ModuleGaze log files found. Skipping."
+    return 0
+  fi
+
+  log "[modulegaze][process] scripts/data/process/processors/modulegaze.py (folder=$modulegaze_folder)"
+  python3 "scripts/data/process/processors/modulegaze.py" "$modulegaze_folder"
+
+  if [[ ! -s "$modulegaze_summary" ]]; then
+    log "[modulegaze] No new data in summary.csv. Skipping ModuleGaze upload."
+    return 0
+  fi
+
+  log "[modulegaze][filter] Schedule '$SCHEDULE_TYPE'"
+  modulegaze_final_basename="$(python3 "scripts/data/automation/filter_time_based.py" "$modulegaze_processed_dir" "$DEVICE_LOCATION" "$SCHEDULE_TYPE" "$RUN_INTERVAL" "modulegaze_logs")"
+  if [[ -n "$modulegaze_final_basename" ]]; then
+    modulegaze_final_csv="$modulegaze_processed_dir/$modulegaze_final_basename"
+  fi
+
+  if [[ -z "$modulegaze_final_csv" || ! -f "$modulegaze_final_csv" ]]; then
+    log "[modulegaze] No entries matched the time period. Skipping ModuleGaze upload."
+    return 0
+  fi
+
+  log "[modulegaze][upload] Prepared $(basename "$modulegaze_final_csv") ($(du -h "$modulegaze_final_csv" | cut -f1))"
+  if (( ONLINE )); then
+    if ! upload_one "$modulegaze_final_csv" "ModuleGaze"; then
+      log "[modulegaze][warn] Upload failed; queueing new ModuleGaze file."
+      queue_one "$modulegaze_final_csv" "$QUEUE_DIR" "ModuleGaze"
+    fi
+  else
+    queue_one "$modulegaze_final_csv" "$QUEUE_DIR" "ModuleGaze"
+  fi
+}
+
+process_modulegaze_logs
 
 OVERALL_FAIL=0
 

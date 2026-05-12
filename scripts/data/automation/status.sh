@@ -79,11 +79,13 @@ if content="$(read_config)"; then
   S3_SUBFOLDER=$(echo "$content" | awk -F= '/^S3_SUBFOLDER=/{print $2}' | sed 's/^"//; s/"$//')
   AWS_PROFILE=$(echo "$content" | awk -F= '/^AWS_PROFILE=/{print $2}' | sed 's/^"//; s/"$//')
   AWS_REGION=$(echo "$content" | awk -F= '/^AWS_REGION=/{print $2}' | sed 's/^"//; s/"$//')
+  MODULEGAZE_ENABLED=$(echo "$content" | awk -F= '/^MODULEGAZE_ENABLED=/{print $2}' | sed 's/^"//; s/"$//')
   echo "  SERVER_VERSION = ${SERVER_VERSION:-<unset>}"
   echo "  PYTHON_SCRIPT  = ${PYTHON_SCRIPT:-<unset>}"
   echo "  DEVICE_LOCATION= ${DEVICE_LOCATION:-<unset>}"
   echo "  S3_BUCKET      = ${S3_BUCKET:-<unset>}"
   echo "  S3_SUBFOLDER   = ${S3_SUBFOLDER:-<unset>}"
+  echo "  MODULEGAZE     = ${MODULEGAZE_ENABLED:-1}"
   echo "  AWS_PROFILE    = ${AWS_PROFILE:-<none>}"
   echo "  AWS_REGION     = ${AWS_REGION:-<none>}"
 else
@@ -111,12 +113,21 @@ echo
 
 echo "QUEUE"
 mkdir -p "$QUEUE_DIR" 2>/dev/null
-Q_COUNT="$(find "$QUEUE_DIR" -maxdepth 1 -type f -name '*.csv' 2>/dev/null | wc -l | tr -d ' ')"
 echo "  Directory  : $QUEUE_DIR"
-echo "  Files      : $Q_COUNT queued CSV(s)"
-if [ "$Q_COUNT" != "0" ]; then
-  find "$QUEUE_DIR" -maxdepth 1 -type f -name '*.csv' -printf '    %TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | sort
-fi
+for q_name in "." "RACHEL" "Kolibri" "ModuleGaze"; do
+  if [ "$q_name" = "." ]; then
+    q_path="$QUEUE_DIR"
+    label="legacy"
+  else
+    q_path="$QUEUE_DIR/$q_name"
+    label="$q_name"
+  fi
+  Q_COUNT="$(find "$q_path" -maxdepth 1 -type f -name '*.csv' 2>/dev/null | wc -l | tr -d ' ')"
+  echo "  $label      : $Q_COUNT queued CSV(s)"
+  if [ "$Q_COUNT" != "0" ]; then
+    find "$q_path" -maxdepth 1 -type f -name '*.csv' -printf '    %TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | sort
+  fi
+done
 echo
 
 echo "PROCESSED"
@@ -166,8 +177,10 @@ if have aws; then
     fi
     if [ -n "$S3_SUBFOLDER" ]; then
       echo "  Prefix     : ${S3_SUBFOLDER}/RACHEL/"
+      echo "  ModuleGaze : ${S3_SUBFOLDER}/ModuleGaze/"
     else
       echo "  Prefix     : RACHEL/"
+      echo "  ModuleGaze : ModuleGaze/"
     fi
   fi
 else

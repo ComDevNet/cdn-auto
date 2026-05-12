@@ -15,10 +15,11 @@ echo "1. V1 - Server v4"
 echo "2. V2 - Server v5"
 echo "3. V3 - Server v6"
 echo "4. V4 - D-Hub"
+echo "5. V5 - ModuleGaze"
 echo ""
 
 # Prompt user for their choice
-read -p "Enter your choice (1, 2, 3, or 4): " user_choice
+read -p "Enter your choice (1, 2, 3, 4, or 5): " user_choice
 
 # Handle user input
 if [[ "$user_choice" == "1" ]]; then
@@ -103,8 +104,12 @@ elif [[ "$user_choice" == "4" ]]; then
     python3 ./scripts/data/process/processors/dhub.py "$selected_folder"
     sleep 2
     exec ./scripts/data/main.sh
+elif [[ "$user_choice" == "5" ]]; then
+    echo -e "${YELLOW}Starting Data Processing (V5 - ModuleGaze) in 2 seconds...${NC}"
+    sleep 2
+    exec ./scripts/data/all/v5/process/logs.sh
 else
-    echo -e "${RED}Invalid choice. Please select 1, 2, 3, or 4.${NC}"
+    echo -e "${RED}Invalid choice. Please select 1, 2, 3, 4, or 5.${NC}"
     echo -e "${YELLOW}Returning to the main menu...${NC}"
     sleep 2
     exec ./scripts/data/main.sh

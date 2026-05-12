@@ -84,6 +84,8 @@ sudo chmod +x scripts/data/all/v3/*.sh
 sudo chmod +x scripts/data/all/v3/process/*.sh
 sudo chmod +x scripts/data/all/v4/*.sh
 sudo chmod +x scripts/data/all/v4/process/*.sh
+sudo chmod +x scripts/data/all/v5/*.sh
+sudo chmod +x scripts/data/all/v5/process/*.sh
 sudo chmod +x scripts/data/collection/*.sh
 sudo chmod +x scripts/data/process/*.sh
 sudo chmod +x scripts/data/upload/*.sh
