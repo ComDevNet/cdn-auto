@@ -4,22 +4,24 @@ Manual upload tools and helpers.
 
 Main pieces
 
-- [upload.sh](./upload.sh) — pick a processed run and send the final CSV to S3
-- [process_csv.py](./process_csv.py) — filter summary.csv for a month and produce LOCATION_MM_YYYY.csv (also used by automation in filename mode)
-- [s3_bucket.sh](./s3_bucket.sh) — helper to pick/validate buckets (if present)
+- [upload.sh](./upload.sh) - pick a processed RACHEL run and send the final CSV to S3
+- [modulegaze.sh](./modulegaze.sh) - pick a processed ModuleGaze run and send the final CSV to S3 under `ModuleGaze/`
+- [kolibri.sh](./kolibri.sh) - export and upload Kolibri summary CSVs
+- [process_csv.py](./process_csv.py) - filter summary.csv for a month and produce a final upload CSV
+- [s3_bucket.sh](./s3_bucket.sh) - helper to pick/validate buckets
 
 Usage
 
 - Menu: [main.sh](./main.sh)
-- Direct: [upload.sh](./upload.sh)
+- Direct RACHEL upload: [upload.sh](./upload.sh)
+- Direct ModuleGaze upload: [modulegaze.sh](./modulegaze.sh)
 
 Inner workings
 
-- upload.sh lists processed run folders (matching _log_) under 00_DATA/00_PROCESSED and prompts for selection
-- It makes a working copy of summary.csv (summary_copy.csv) and invokes process_csv.py with:
-  - folder path, device location (prompted), month (prompted, normalized to 2 digits), and input filename
-  - in manual mode, process_csv.py prints the year; the final file is LOCATION_MM_YYYY.csv
-- The script then prompts for an S3 subfolder and uploads to s3://rachel-upload-test/subfolder/RACHEL/LOCATION_MM_YYYY.csv
+- upload.sh lists processed run folders under 00_DATA/00_PROCESSED and uploads to `RACHEL/`
+- modulegaze.sh lists ModuleGaze processed folders and uploads to `ModuleGaze/`
+- Both scripts make a working copy of summary.csv, filter it by month, and create deterministic filenames
+- process_csv.py finds the Access Date column by header name, so it supports the normal RACHEL schemas and the ModuleGaze combined schema
 
 Error modes
 

@@ -5,7 +5,15 @@ import os
 import csv
 from datetime import datetime, timedelta
 
-def process_csv(folder, location, month, processed_file_name, mode='year'):
+def column_index(header, column_name, fallback=None):
+    normalized = [value.strip().lower() for value in header]
+    try:
+        return normalized.index(column_name.strip().lower())
+    except ValueError:
+        return fallback
+
+
+def process_csv(folder, location, month, processed_file_name, mode='year', suffix='access_logs'):
     """
     Filters a CSV for a specific month.
     - In 'year' mode (default, for manual upload), it prints the year.
@@ -40,12 +48,13 @@ def process_csv(folder, location, month, processed_file_name, mode='year'):
             try:
                 header = next(reader)
                 writer.writerow(header)
+                date_index = column_index(header, "Access Date", 1)
             except StopIteration:
                 sys.exit(0) # Exit gracefully if empty, printing nothing
 
             for row in reader:
                 try:
-                    date_obj = datetime.strptime(row[1], '%Y-%m-%d')
+                    date_obj = datetime.strptime(row[date_index], '%Y-%m-%d')
                     if date_obj.month == month:
                         writer.writerow(row)
                         rows_written += 1
@@ -66,7 +75,7 @@ def process_csv(folder, location, month, processed_file_name, mode='year'):
         sys.exit(0)
 
     # Final rename
-    final_name = f"{location}_{month:02d}_{latest_year}_access_logs.csv"
+    final_name = f"{location}_{month:02d}_{latest_year}_{suffix}.csv"
     final_path = os.path.join(folder, final_name)
     os.rename(temp_output_path, final_path)
     sys.stderr.write(f"✅ Found {rows_written} log entries for uploading\n")
@@ -77,8 +86,8 @@ def process_csv(folder, location, month, processed_file_name, mode='year'):
         print(latest_year)
 
 if __name__ == "__main__":
-    if len(sys.argv) not in [5, 6]:
-        sys.stderr.write("Usage: python process_csv.py <folder> <location> <month> <processed_file_name> [mode]\n")
+    if len(sys.argv) not in [5, 6, 7]:
+        sys.stderr.write("Usage: python process_csv.py <folder> <location> <month> <processed_file_name> [mode] [suffix]\n")
         sys.exit(1)
 
     folder = sys.argv[1]
@@ -97,6 +106,14 @@ if __name__ == "__main__":
     mode = 'year'
     if len(sys.argv) == 6 and sys.argv[5] == 'filename':
         mode = 'filename'
+    elif len(sys.argv) == 6 and sys.argv[5] == 'year':
+        mode = 'year'
+
+    suffix = 'access_logs'
+    if len(sys.argv) == 7:
+        if sys.argv[5] in ('year', 'filename'):
+            mode = sys.argv[5]
+        suffix = sys.argv[6]
         
-    process_csv(folder, location, month, processed_file_name, mode)
+    process_csv(folder, location, month, processed_file_name, mode, suffix)
 

@@ -8,7 +8,15 @@ from datetime import datetime
 from time_window import build_filename, compute_window
 
 
-def process_time_based_csv(folder, location, schedule_type, run_interval_seconds=None):
+def column_index(header, column_name, fallback=None):
+    normalized = [value.strip().lower() for value in header]
+    try:
+        return normalized.index(column_name.strip().lower())
+    except ValueError:
+        return fallback
+
+
+def process_time_based_csv(folder, location, schedule_type, run_interval_seconds=None, suffix="access_logs"):
     """
     Filters summary.csv for the last completed interval and prints the final filename on success.
     """
@@ -27,7 +35,7 @@ def process_time_based_csv(folder, location, schedule_type, run_interval_seconds
 
     start_time = window.start
     end_time = window.end
-    output_filename = build_filename(location, schedule_type, "access_logs", window=window)
+    output_filename = build_filename(location, schedule_type, suffix, window=window)
 
     sys.stderr.write(f"Filtering logs for: {window.label}\n")
 
@@ -44,15 +52,17 @@ def process_time_based_csv(folder, location, schedule_type, run_interval_seconds
             try:
                 header = next(reader)
                 writer.writerow(header)
+                date_index = column_index(header, "Access Date", 1)
+                time_index = column_index(header, "Access Time")
             except StopIteration:
                 sys.exit(0)
 
             for row in reader:
                 try:
-                    row_date_str = row[1]
-                    if len(row) > 2 and row[2]:
+                    row_date_str = row[date_index]
+                    if time_index is not None and len(row) > time_index and row[time_index]:
                         try:
-                            row_time_str = row[2]
+                            row_time_str = row[time_index]
                             date_time_obj = datetime.strptime(
                                 f"{row_date_str} {row_time_str}", "%Y-%m-%d %H:%M:%S"
                             )
@@ -80,18 +90,25 @@ def process_time_based_csv(folder, location, schedule_type, run_interval_seconds
 
 
 if __name__ == "__main__":
-    if len(sys.argv) not in (4, 5):
+    if len(sys.argv) not in (4, 5, 6):
         sys.stderr.write(
-            "Usage: python filter_time_based.py <folder_path> <device_location> <schedule_type> [run_interval_seconds]\n"
+            "Usage: python filter_time_based.py <folder_path> <device_location> <schedule_type> [run_interval_seconds] [suffix]\n"
         )
         sys.exit(1)
 
     run_interval_seconds = None
-    if len(sys.argv) == 5 and sys.argv[4]:
+    if len(sys.argv) >= 5 and sys.argv[4]:
         try:
             run_interval_seconds = int(sys.argv[4])
         except ValueError:
             sys.stderr.write("Error: run_interval_seconds must be an integer.\n")
             sys.exit(1)
 
-    process_time_based_csv(sys.argv[1], sys.argv[2], sys.argv[3], run_interval_seconds=run_interval_seconds)
+    suffix = sys.argv[5] if len(sys.argv) == 6 and sys.argv[5] else "access_logs"
+    process_time_based_csv(
+        sys.argv[1],
+        sys.argv[2],
+        sys.argv[3],
+        run_interval_seconds=run_interval_seconds,
+        suffix=suffix,
+    )

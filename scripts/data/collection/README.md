@@ -2,16 +2,18 @@
 
 Collect server logs from:
 
-- v4 (Apache) at /var/log/apache2 (access.log\*)
-- v5 (OC4D) at /var/log/oc4d (oc4d-_.log, capecoastcastle-_.log, *.gz; excludes *exceptions\*)
-- v3 (D-Hub) at /var/log/dhub (\*.log)
-- v6 (Server v6) at /var/log/oc4d (v6-\_.log; excludes \*exceptions\*)
+- v4 (Apache) at /var/log/apache2 (access.log*)
+- v5 (OC4D) at /var/log/oc4d (oc4d-*.log, capecoastcastle-*.log, *.gz; excludes *exceptions*)
+- v3 (D-Hub) at /var/log/dhub (*.log)
+- v6 (Server v6) at /var/log/oc4d (v6-*.log; excludes *exceptions*)
+- ModuleGaze at /var/log/modulegaze (active modulegaze logs and daily .log.zip archives)
 
 Outputs
 
-- Creates a run folder in 00_DATA named LOCATION_logs_YYYY_MM_DD and copies relevant files there
-- Decompresses any .gz files in-place
-- Skips exception logs (e.g., oc4d-exceptions-\*.log) to avoid noise
+- Creates a run folder in 00_DATA named LOCATION_logs_YYYY_MM_DD, or LOCATION_modulegaze_logs_YYYY_MM_DD for ModuleGaze
+- Copies relevant files there
+- Decompresses any .gz files in-place for the existing server log processors
+- Skips exception logs (e.g., oc4d-exceptions-*.log) to avoid noise
 
 Usage
 
@@ -20,13 +22,10 @@ Usage
 
 Inner workings
 
-- The script prompts for server type (v4, v5, v3, or v6) and device location (used in the folder name)
-- v4 copies files matching access.log\* from /var/log/apache2
-- v5 copies:
-  - oc4d-_.log (excluding oc4d-exceptions-_.log)
-  - capecoastcastle-_.log (excluding capecoastcastle-exceptions-_.log)
-  - any \*.gz files
-- v3 copies \*.log files from /var/log/dhub
-- v6 copies v6-_.log files (excluding v6-exceptions-_.log) from /var/log/oc4d
-- After copying, .gz files are decompressed so processors can read plain text
+- The script prompts for server type and device location (used in the folder name)
+- v4 copies files matching access.log* from /var/log/apache2
+- v5 copies oc4d logs, Cape Coast Castle logs, and any *.gz files
+- v3 copies *.log files from /var/log/dhub
+- v6 copies v6-*.log files from /var/log/oc4d
+- ModuleGaze copies modulegaze-access/modulegaze-sessions active logs and daily zip archives from /var/log/modulegaze
 - The resulting folder is moved into 00_DATA for the processing stage

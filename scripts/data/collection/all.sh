@@ -6,10 +6,11 @@ echo "1. V4 Logs (Located at /var/log/apache2)"
 echo "2. V5 Logs (Located at /var/log/oc4d)"
 echo "3. V6 Logs (Located at /var/log/oc4d)"
 echo "4. D-Hub Logs (Located at /var/log/dhub)"
+echo "5. ModuleGaze Logs (Located at /var/log/modulegaze)"
 echo ""
 
 # Prompt the user to select the log type
-read -p "Please select the type of logs to collect (1 for V4, 2 for V5, 3 for V6, 4 for D-Hub): " log_choice
+read -p "Please select the type of logs to collect (1 for V4, 2 for V5, 3 for V6, 4 for D-Hub, 5 for ModuleGaze): " log_choice
 
 # Set the log directory and collection logic based on the user's selection
 case $log_choice in
@@ -29,8 +30,12 @@ case $log_choice in
         log_directory="/var/log/dhub"
         log_type="D-Hub Logs"
         ;;
+    5)
+        log_directory="/var/log/modulegaze"
+        log_type="ModuleGaze Logs"
+        ;;
     *)
-        echo "Invalid choice. Please run the script again and choose 1, 2, 3, or 4."
+        echo "Invalid choice. Please run the script again and choose 1, 2, 3, 4, or 5."
         exit 1
         ;;
 esac
@@ -74,6 +79,19 @@ elif [[ "$log_choice" == "4" ]]; then
     # For D-Hub logs: Collect *.log files
     find "$log_directory" -type f -name "*.log" \
         -exec cp {} "$new_folder"/ \;
+elif [[ "$log_choice" == "5" ]]; then
+    # For ModuleGaze logs: Collect active logs and daily zip archives
+    find "$log_directory" -type f \
+        \( \
+            -name "modulegaze-access.log" \
+            -o \
+            -name "modulegaze-sessions.log" \
+            -o \
+            -name "modulegaze-access-*.log.zip" \
+            -o \
+            -name "modulegaze-sessions-*.log.zip" \
+        \) \
+        -exec cp {} "$new_folder"/ \;
 fi
 
 # Move to the new folder
@@ -110,11 +128,13 @@ while true; do
         [Yy]* )
             echo "Starting the log processing script..."
             sleep 1
-            if [[ "$log_choice" == "1" ]]; then
-                exec ./scripts/data/process/all.sh
-            elif [[ "$log_choice" == "2" ]]; then
-                exec ./scripts/data/all/v2/process/logs.sh
-            fi
+            case "$log_choice" in
+                1) exec ./scripts/data/all/v1/process/logs.sh ;;
+                2) exec ./scripts/data/all/v2/process/logs.sh ;;
+                3) exec ./scripts/data/all/v3/process/logs.sh ;;
+                4) exec ./scripts/data/all/v4/process/logs.sh ;;
+                5) exec ./scripts/data/all/v5/process/logs.sh ;;
+            esac
             break
             ;;
         [Nn]* )

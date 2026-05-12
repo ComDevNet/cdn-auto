@@ -1,5 +1,5 @@
 #!/bin/bash
-# Flush queued CSV uploads for both RACHEL and Kolibri destinations.
+# Flush queued CSV uploads for RACHEL, Kolibri, and ModuleGaze destinations.
 set -euo pipefail
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -36,7 +36,10 @@ load_config
 QUEUE_DIR="$PROJECT_ROOT/00_DATA/00_UPLOAD_QUEUE"
 prepare_queue_dirs "$QUEUE_DIR"
 
-if ! compgen -G "$QUEUE_DIR/*.csv" >/dev/null && ! compgen -G "$QUEUE_DIR/RACHEL/*.csv" >/dev/null && ! compgen -G "$QUEUE_DIR/Kolibri/*.csv" >/dev/null; then
+if ! compgen -G "$QUEUE_DIR/*.csv" >/dev/null \
+  && ! compgen -G "$QUEUE_DIR/RACHEL/*.csv" >/dev/null \
+  && ! compgen -G "$QUEUE_DIR/Kolibri/*.csv" >/dev/null \
+  && ! compgen -G "$QUEUE_DIR/ModuleGaze/*.csv" >/dev/null; then
   log "Queue empty at $QUEUE_DIR"
   exit 0
 fi
