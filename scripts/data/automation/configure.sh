@@ -70,6 +70,69 @@ aws_su(){
 }
 aws_capture(){ aws_su "$@" 2>/dev/null; }
 
+child_prefix_from_s3_value(){
+  local parent="${1#/}"
+  local value="$2"
+
+  parent="${parent%/}"
+  [[ -n "$parent" ]] && parent="${parent}/"
+  value="${value//$'\r'/}"
+  value="${value#/}"
+
+  if [[ -n "$parent" && "$value" == "$parent"* ]]; then
+    value="${value#"$parent"}"
+  fi
+
+  value="${value#/}"
+  value="${value%/}"
+  value="${value%%/*}"
+  [[ -n "$value" ]] && printf '%s\n' "$value"
+}
+
+discover_child_prefixes(){
+  local bucket_name="$1"
+  local parent_prefix="${2#/}"
+  local scan_contents="${3:-0}"
+  local prefix_args=()
+  local out rc line p s3_uri base
+
+  parent_prefix="${parent_prefix%/}"
+  [[ -n "$parent_prefix" ]] && prefix_args=( --prefix "${parent_prefix}/" )
+
+  out="$(aws_capture s3api list-objects-v2 --bucket "$bucket_name" "${prefix_args[@]}" --delimiter '/' --query 'CommonPrefixes[].Prefix' --output text 2>&1)"; rc=$?
+  if (( rc == 0 )) && [[ -n "$out" && "$out" != "None" ]]; then
+    while IFS= read -r p; do
+      child_prefix_from_s3_value "$parent_prefix" "$p"
+    done < <(printf '%s' "$out" | tr '\t' '\n' | sed '/^[[:space:]]*$/d')
+  fi
+
+  s3_uri="s3://$bucket_name/"
+  [[ -n "$parent_prefix" ]] && s3_uri="${s3_uri}${parent_prefix}/"
+  out="$(aws_capture s3 ls "$s3_uri" 2>&1 || true)"
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]*PRE[[:space:]]+(.+)/[[:space:]]*$ ]]; then
+      child_prefix_from_s3_value "" "${BASH_REMATCH[1]}"
+    fi
+  done <<< "$out"
+
+  # Some S3 "folders" only show up as object keys beneath the prefix. Scanning
+  # keys under RACHEL recovers those without treating root-level CSVs as folders.
+  if [[ "$scan_contents" == "1" ]]; then
+    out="$(aws_capture s3api list-objects-v2 --bucket "$bucket_name" "${prefix_args[@]}" --query 'Contents[].Key' --output text 2>&1)"; rc=$?
+    if (( rc == 0 )) && [[ -n "$out" && "$out" != "None" ]]; then
+      base="$parent_prefix"
+      [[ -n "$base" ]] && base="${base}/"
+      while IFS= read -r p; do
+        p="${p//$'\r'/}"
+        [[ -n "$base" && "$p" != "$base"* ]] && continue
+        p="${p#"$base"}"
+        [[ "$p" != */* ]] && continue
+        child_prefix_from_s3_value "" "$p"
+      done < <(printf '%s' "$out" | tr '\t' '\n' | sed '/^[[:space:]]*$/d')
+    fi
+  fi
+}
+
 check_network(){
   getent hosts s3.amazonaws.com >/dev/null 2>&1 || return 1
   have curl && timeout 5s curl -Is https://s3.amazonaws.com >/dev/null 2>&1 || true
@@ -188,28 +251,16 @@ pick_subfolder(){
   local bucket_name="${S3_BUCKET#s3://}"; bucket_name="${bucket_name%%/*}"
   local opts=( "NONE" "<bucket root>" "CUSTOM" "Enter subfolder manually" )
   local prefixes=()
-  local out rc
-  out="$(aws_capture s3api list-objects-v2 --bucket "$bucket_name" --delimiter '/' --query 'CommonPrefixes[].Prefix' --output text 2>&1)"; rc=$?
-  if (( rc == 0 )) && [[ -n "$out" && "$out" != "None" ]]; then
-    while IFS= read -r p; do
-      p="${p%/}"
-      [[ -n "$p" ]] && prefixes+=( "$p" )
-    done < <(printf '%s' "$out" | tr '\t' '\n' | sed '/^ *$/d')
-  else
-    out="$(aws_capture s3 ls "s3://$bucket_name/" 2>&1 || true)"
-    while IFS= read -r line; do
-      if [[ "$line" == PRE* ]]; then
-        p="$(echo "$line" | awk '{print $2}' | sed 's:/$::')"
-        [[ -n "$p" ]] && prefixes+=( "$p" )
-      fi
-    done <<< "$out"
-  fi
+  local p
+  while IFS= read -r p; do
+    [[ -n "$p" ]] && prefixes+=( "$p" )
+  done < <(discover_child_prefixes "$bucket_name" "" 0)
   if [[ -n "$S3_SUBFOLDER" ]]; then
     prefixes+=( "$(sanitize_subfolder "$S3_SUBFOLDER")" )
   fi
   while IFS= read -r p; do
     [[ -n "$p" ]] && opts+=( "$p" "$p" )
-  done < <(printf '%s\n' "${prefixes[@]}" | sed '/^$/d' | sort -fu)
+  done < <(printf '%s\n' "${prefixes[@]}" | sed '/^$/d' | LC_ALL=C sort -u)
   choice="$(menu_select_cancelable "Select S3 subfolder in s3://$bucket_name/" 20 74 12 "${opts[@]}")"
   [[ "$choice" == "__EXIT__" ]] && exit 2
   case "$choice" in
@@ -226,21 +277,16 @@ pick_rachel_subfolder(){
   local rachel_base="${S3_SUBFOLDER:+${S3_SUBFOLDER}/}RACHEL/"
   local opts=( "NONE" "<RACHEL root>" "CUSTOM" "Enter RACHEL subfolder manually" )
   local prefixes=()
-  local out rc
-  out="$(aws_capture s3api list-objects-v2 --bucket "$bucket_name" --prefix "$rachel_base" --delimiter '/' --query 'CommonPrefixes[].Prefix' --output text 2>&1)"; rc=$?
-  if (( rc == 0 )) && [[ -n "$out" && "$out" != "None" ]]; then
-    while IFS= read -r p; do
-      p="${p#${rachel_base}}"
-      p="${p%/}"
-      [[ -n "$p" ]] && prefixes+=( "$p" )
-    done < <(printf '%s' "$out" | tr '\t' '\n' | sed '/^ *$/d')
-  fi
+  local p
+  while IFS= read -r p; do
+    [[ -n "$p" ]] && prefixes+=( "$p" )
+  done < <(discover_child_prefixes "$bucket_name" "$rachel_base" 1)
   if [[ -n "$RACHEL_SUBFOLDER" ]]; then
     prefixes+=( "$(sanitize_subfolder "$RACHEL_SUBFOLDER")" )
   fi
   while IFS= read -r p; do
     [[ -n "$p" ]] && opts+=( "$p" "$p" )
-  done < <(printf '%s\n' "${prefixes[@]}" | sed '/^$/d' | sort -fu)
+  done < <(printf '%s\n' "${prefixes[@]}" | sed '/^$/d' | LC_ALL=C sort -u)
   choice="$(menu_select_cancelable "Select RACHEL subfolder in s3://$bucket_name/$rachel_base" 20 74 12 "${opts[@]}")"
   [[ "$choice" == "__EXIT__" ]] && exit 2
   case "$choice" in
