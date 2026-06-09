@@ -80,12 +80,20 @@ if content="$(read_config)"; then
   AWS_PROFILE=$(echo "$content" | awk -F= '/^AWS_PROFILE=/{print $2}' | sed 's/^"//; s/"$//')
   AWS_REGION=$(echo "$content" | awk -F= '/^AWS_REGION=/{print $2}' | sed 's/^"//; s/"$//')
   MODULEGAZE_ENABLED=$(echo "$content" | awk -F= '/^MODULEGAZE_ENABLED=/{print $2}' | sed 's/^"//; s/"$//')
+  OC4D_ASSESSMENTS_ENABLED=$(echo "$content" | awk -F= '/^OC4D_ASSESSMENTS_ENABLED=/{print $2}' | sed 's/^"//; s/"$//')
+  OC4D_API_BASE_URL=$(echo "$content" | awk -F= '/^OC4D_API_BASE_URL=/{print $2}' | sed 's/^"//; s/"$//')
+  OC4D_BUCKET=$(echo "$content" | awk -F= '/^OC4D_BUCKET=/{print $2}' | sed 's/^"//; s/"$//')
+  OC4D_PARENT_ORG=$(echo "$content" | awk -F= '/^OC4D_PARENT_ORG=/{print $2}' | sed 's/^"//; s/"$//')
   echo "  SERVER_VERSION = ${SERVER_VERSION:-<unset>}"
   echo "  PYTHON_SCRIPT  = ${PYTHON_SCRIPT:-<unset>}"
   echo "  DEVICE_LOCATION= ${DEVICE_LOCATION:-<unset>}"
   echo "  S3_BUCKET      = ${S3_BUCKET:-<unset>}"
   echo "  S3_SUBFOLDER   = ${S3_SUBFOLDER:-<unset>}"
   echo "  MODULEGAZE     = ${MODULEGAZE_ENABLED:-1}"
+  echo "  OC4D assess.   = ${OC4D_ASSESSMENTS_ENABLED:-0}"
+  echo "  OC4D API       = ${OC4D_API_BASE_URL:-<unset>}"
+  echo "  OC4D bucket    = ${OC4D_BUCKET:-oc4d-raw-reports}"
+  echo "  OC4D parentOrg = ${OC4D_PARENT_ORG:-Home-Schooling}"
   echo "  AWS_PROFILE    = ${AWS_PROFILE:-<none>}"
   echo "  AWS_REGION     = ${AWS_REGION:-<none>}"
 else
@@ -114,7 +122,7 @@ echo
 echo "QUEUE"
 mkdir -p "$QUEUE_DIR" 2>/dev/null
 echo "  Directory  : $QUEUE_DIR"
-for q_name in "." "RACHEL" "Kolibri" "ModuleGaze"; do
+for q_name in "." "RACHEL" "Kolibri" "ModuleGaze" "OC4DAssessments"; do
   if [ "$q_name" = "." ]; then
     q_path="$QUEUE_DIR"
     label="legacy"

@@ -1,0 +1,571 @@
+#!/usr/bin/env python3
+"""
+Fetch OC4D assessment results (API and/or source CSV folder), resolve cloud IDs via
+mapping files, validate CSV shape, and emit upload-ready artifacts plus manifest.json.
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+REQUIRED_KEY_PATTERN = re.compile(
+    r"^[^/]+/Assessments/[^/]+/[^/]+/[^/]+__[^/]+\.csv$"
+)
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def iso_ts_for_key(value: str | None) -> str:
+    raw = (value or utc_now_iso()).strip()
+    return raw.replace(":", "-")
+
+
+def safe_base_name(value: str, fallback: str = "assessment-result") -> str:
+    cleaned = re.sub(r"[^a-z0-9._-]+", "-", value.strip().lower())
+    cleaned = cleaned.strip("-")
+    return cleaned or fallback
+
+
+def normalize_key_segment(value: str) -> str:
+    return value.strip().strip("/")
+
+
+def build_object_key(
+    parent_org: str,
+    student_id: str,
+    assessment_id: str,
+    base: str,
+    iso_ts: str,
+) -> str:
+    parent_org = normalize_key_segment(parent_org)
+    student_id = normalize_key_segment(student_id)
+    assessment_id = normalize_key_segment(assessment_id)
+    base = safe_base_name(base)
+    iso_ts = iso_ts_for_key(iso_ts)
+    if not all([parent_org, student_id, assessment_id, base, iso_ts]):
+        raise ValueError("missing required key segments")
+    key = f"{parent_org}/Assessments/{student_id}/{assessment_id}/{base}__{iso_ts}.csv"
+    if not REQUIRED_KEY_PATTERN.match(key):
+        raise ValueError(f"invalid object key: {key}")
+    return key
+
+
+def load_mapping_file(path: Path, required_columns: tuple[str, ...]) -> list[dict[str, str]]:
+    if not path.exists():
+        raise FileNotFoundError(f"mapping file not found: {path}")
+
+    rows: list[dict[str, str]] = []
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames:
+            raise ValueError(f"mapping file has no header: {path}")
+        missing = [col for col in required_columns if col not in reader.fieldnames]
+        if missing:
+            raise ValueError(f"mapping file {path} missing columns: {', '.join(missing)}")
+        for row in reader:
+            source = (row.get(required_columns[0]) or "").strip()
+            if not source or source.startswith("#"):
+                continue
+            normalized = {col: (row.get(col) or "").strip() for col in required_columns}
+            if not all(normalized.values()):
+                continue
+            rows.append(normalized)
+    return rows
+
+
+def index_mapping(rows: list[dict[str, str]], source_key: str) -> dict[str, dict[str, str]]:
+    indexed: dict[str, dict[str, str]] = {}
+    for row in rows:
+        key = row[source_key].strip().lower()
+        indexed[key] = row
+    return indexed
+
+
+def resolve_student_mapping(
+    student_index: dict[str, dict[str, str]],
+    default_parent_org: str,
+    *,
+    user_id: str = "",
+    user_name: str = "",
+    user_email: str = "",
+    user_username: str = "",
+) -> tuple[str, str]:
+    candidates = [
+        user_email.strip().lower(),
+        user_username.strip().lower(),
+        user_name.strip().lower(),
+        user_id.strip().lower(),
+        user_id.strip(),
+    ]
+    for candidate in candidates:
+        if candidate and candidate in student_index:
+            row = student_index[candidate]
+            parent_org = row.get("parentOrg") or default_parent_org
+            return row["studentId"], parent_org
+    raise KeyError(
+        "missing studentId mapping for "
+        f"userId={user_id!r} email={user_email!r} username={user_username!r} name={user_name!r}"
+    )
+
+
+def resolve_assessment_mapping(
+    assessment_index: dict[str, dict[str, str]],
+    default_parent_org: str,
+    *,
+    assessment_id: str = "",
+    assessment_title: str = "",
+) -> tuple[str, str]:
+    candidates = [
+        assessment_id.strip().lower(),
+        assessment_id.strip(),
+        assessment_title.strip().lower(),
+        assessment_title.strip(),
+    ]
+    for candidate in candidates:
+        if candidate and candidate in assessment_index:
+            row = assessment_index[candidate]
+            parent_org = row.get("parentOrg") or default_parent_org
+            return row["assessmentId"], parent_org
+    raise KeyError(
+        "missing assessmentId mapping for "
+        f"assessmentId={assessment_id!r} title={assessment_title!r}"
+    )
+
+
+def parse_created_at(value: Any) -> str:
+    if value is None:
+        return utc_now_iso()
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    text = str(value).strip()
+    if not text:
+        return utc_now_iso()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return text
+
+
+def selected_answer_for(answers: Any, question: dict[str, Any], question_index: int) -> str:
+    selected_index: int | None = None
+    if isinstance(answers, list):
+        value = answers[question_index] if question_index < len(answers) else None
+        selected_index = value if isinstance(value, int) else None
+    elif isinstance(answers, dict):
+        review = answers.get("review")
+        if isinstance(review, list) and question_index < len(review):
+            item = review[question_index]
+            if isinstance(item, dict):
+                raw = item.get("selectedIndex")
+                selected_index = raw if isinstance(raw, int) else None
+        if selected_index is None:
+            selections = answers.get("selections")
+            if isinstance(selections, dict):
+                raw = selections.get(question.get("id")) or selections.get(str(question_index))
+                selected_index = raw if isinstance(raw, int) else None
+            else:
+                raw = answers.get(question.get("id")) or answers.get(str(question_index))
+                selected_index = raw if isinstance(raw, int) else None
+
+    options = question.get("options") or []
+    if selected_index is None or not isinstance(options, list):
+        return ""
+    if selected_index < 0 or selected_index >= len(options):
+        return ""
+    return str(options[selected_index])
+
+
+def validate_csv_file(path: Path) -> None:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.reader(handle)
+        try:
+            header = next(reader)
+        except StopIteration as exc:
+            raise ValueError("empty header row") from exc
+        if not header or not any(cell.strip() for cell in header):
+            raise ValueError("empty header row")
+        normalized = [cell.strip().lower() for cell in header]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("duplicate header names after trim/lower normalize")
+        data_rows = [row for row in reader if any(cell.strip() for cell in row)]
+        if not data_rows:
+            raise ValueError("zero data rows")
+
+
+def write_result_csv(
+    path: Path,
+    timestamp: str,
+    questions: list[dict[str, Any]],
+    answers: Any,
+) -> None:
+    headers = ["Timestamp"]
+    headers.extend((q.get("prompt") or f"Question {idx + 1}").strip() for idx, q in enumerate(questions))
+    row = [timestamp]
+    for idx, question in enumerate(questions):
+        row.append(selected_answer_for(answers, question, idx))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(headers)
+        writer.writerow(row)
+    validate_csv_file(path)
+
+
+def load_state(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return set()
+    uploaded = payload.get("uploadedIds") or []
+    return {str(item) for item in uploaded}
+
+
+def save_state(path: Path, uploaded_ids: set[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"uploadedIds": sorted(uploaded_ids)}
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def fetch_api_payload(api_base: str, token: str, take: int) -> dict[str, Any]:
+    api_base = api_base.rstrip("/")
+    url = f"{api_base}/api/assessment-results?scope=all&take={take}"
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"API fetch failed ({exc.code}): {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"API fetch failed: {exc}") from exc
+    payload = json.loads(body)
+    if not isinstance(payload, dict):
+        raise RuntimeError("API response must be a JSON object")
+    return payload
+
+
+def process_api_results(
+    payload: dict[str, Any],
+    *,
+    student_index: dict[str, dict[str, str]],
+    assessment_index: dict[str, dict[str, str]],
+    default_parent_org: str,
+    staging_dir: Path,
+    uploaded_ids: set[str],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    results = payload.get("data") or []
+    questions_by_assessment = payload.get("questionsByAssessmentId") or {}
+    if not isinstance(results, list):
+        raise ValueError("API payload field 'data' must be an array")
+
+    manifest_entries: list[dict[str, Any]] = []
+    counts = {"uploaded": 0, "skipped": 0, "failed": 0}
+
+    for result in results:
+        if not isinstance(result, dict):
+            counts["failed"] += 1
+            manifest_entries.append(
+                {"status": "failed", "reason": "result row is not an object", "result_id": ""}
+            )
+            continue
+
+        result_id = str(result.get("id") or "").strip()
+        if result_id and result_id in uploaded_ids:
+            counts["skipped"] += 1
+            manifest_entries.append(
+                {"status": "skipped", "reason": "already uploaded", "result_id": result_id}
+            )
+            continue
+
+        assessment = result.get("assessment") or {}
+        user = result.get("user") or {}
+        assessment_id_local = str(result.get("assessmentId") or assessment.get("id") or "").strip()
+        assessment_title = str(assessment.get("title") or "").strip()
+        user_id = str(result.get("userId") or user.get("id") or "").strip()
+        user_name = str(user.get("name") or "").strip()
+        user_email = str(user.get("email") or "").strip()
+        user_username = str(user.get("username") or "").strip()
+        created_at = parse_created_at(result.get("createdAt"))
+        answers = result.get("answers")
+
+        try:
+            student_id, parent_org = resolve_student_mapping(
+                student_index,
+                default_parent_org,
+                user_id=user_id,
+                user_name=user_name,
+                user_email=user_email,
+                user_username=user_username,
+            )
+            cloud_assessment_id, assessment_parent = resolve_assessment_mapping(
+                assessment_index,
+                default_parent_org,
+                assessment_id=assessment_id_local,
+                assessment_title=assessment_title,
+            )
+            parent_org = assessment_parent or parent_org
+            questions = questions_by_assessment.get(assessment_id_local) or []
+            if not questions:
+                raise ValueError(f"no questions for assessmentId={assessment_id_local}")
+
+            base = safe_base_name(assessment_title or cloud_assessment_id)
+            s3_key = build_object_key(
+                parent_org,
+                student_id,
+                cloud_assessment_id,
+                base,
+                created_at,
+            )
+            file_name = s3_key.split("/")[-1]
+            csv_path = staging_dir / file_name
+            write_result_csv(csv_path, created_at, questions, answers)
+
+            manifest_entries.append(
+                {
+                    "status": "ready",
+                    "result_id": result_id,
+                    "csv": str(csv_path),
+                    "s3_key": s3_key,
+                }
+            )
+            counts["uploaded"] += 1
+        except (KeyError, ValueError) as exc:
+            counts["failed"] += 1
+            manifest_entries.append(
+                {
+                    "status": "failed",
+                    "reason": str(exc),
+                    "result_id": result_id,
+                }
+            )
+
+    print(
+        json.dumps(
+            {
+                "source": "api",
+                "counts": counts,
+                "entries": manifest_entries,
+            }
+        )
+    )
+    return manifest_entries, uploaded_ids
+
+
+def normalize_source_csv(source_path: Path, dest_path: Path) -> None:
+    raw = source_path.read_bytes()
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line for line in text.split("\n") if line.strip()]
+    if not lines:
+        raise ValueError(f"empty csv: {source_path}")
+    while lines and lines[0].strip().startswith("#"):
+        lines.pop(0)
+    if not lines:
+        raise ValueError(f"csv has no header row: {source_path}")
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    dest_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    validate_csv_file(dest_path)
+
+
+def process_source_dir(
+    source_dir: Path,
+    *,
+    student_index: dict[str, dict[str, str]],
+    assessment_index: dict[str, dict[str, str]],
+    default_parent_org: str,
+    staging_dir: Path,
+) -> list[dict[str, Any]]:
+    manifest_entries: list[dict[str, Any]] = []
+    counts = {"uploaded": 0, "skipped": 0, "failed": 0}
+
+    for source_csv in sorted(source_dir.glob("*.csv")):
+        stem = source_csv.stem
+        parts = stem.split("__")
+        source_assessment = parts[0] if parts else stem
+        source_student = parts[1] if len(parts) > 1 else stem
+        try:
+            student_id, parent_org = resolve_student_mapping(
+                student_index,
+                default_parent_org,
+                user_id=source_student,
+                user_name=source_student,
+                user_email=source_student,
+                user_username=source_student,
+            )
+            cloud_assessment_id, assessment_parent = resolve_assessment_mapping(
+                assessment_index,
+                default_parent_org,
+                assessment_id=source_assessment,
+                assessment_title=source_assessment,
+            )
+            parent_org = assessment_parent or parent_org
+            timestamp = utc_now_iso()
+            base = safe_base_name(source_assessment)
+            s3_key = build_object_key(
+                parent_org,
+                student_id,
+                cloud_assessment_id,
+                base,
+                timestamp,
+            )
+            file_name = s3_key.split("/")[-1]
+            dest_csv = staging_dir / file_name
+            normalize_source_csv(source_csv, dest_csv)
+            manifest_entries.append(
+                {
+                    "status": "ready",
+                    "result_id": source_csv.name,
+                    "csv": str(dest_csv),
+                    "s3_key": s3_key,
+                }
+            )
+            counts["uploaded"] += 1
+        except (KeyError, ValueError, OSError) as exc:
+            counts["failed"] += 1
+            manifest_entries.append(
+                {
+                    "status": "failed",
+                    "reason": str(exc),
+                    "result_id": source_csv.name,
+                }
+            )
+
+    print(
+        json.dumps(
+            {
+                "source": "source_dir",
+                "counts": counts,
+                "entries": manifest_entries,
+            }
+        )
+    )
+    return manifest_entries
+
+
+def write_manifest(staging_dir: Path, entries: list[dict[str, Any]]) -> Path:
+    manifest_path = staging_dir / "manifest.json"
+    ready = [entry for entry in entries if entry.get("status") == "ready"]
+    failed = [entry for entry in entries if entry.get("status") == "failed"]
+    skipped = [entry for entry in entries if entry.get("status") == "skipped"]
+    payload = {
+        "generatedAt": utc_now_iso(),
+        "ready": ready,
+        "failed": failed,
+        "skipped": skipped,
+        "counts": {
+            "ready": len(ready),
+            "failed": len(failed),
+            "skipped": len(skipped),
+        },
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return manifest_path
+
+
+def main() -> int:
+    project_root = Path(__file__).resolve().parents[4]
+    data_dir = project_root / "00_DATA"
+    assessments_root = data_dir / "00_OC4D_ASSESSMENTS"
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    staging_dir = assessments_root / f"staging_{stamp}"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    default_parent_org = os.environ.get("OC4D_PARENT_ORG", "Home-Schooling").strip()
+    student_map = Path(
+        os.environ.get(
+            "OC4D_STUDENT_MAP_FILE",
+            str(project_root / "config/oc4d/student-map.csv"),
+        )
+    )
+    assessment_map = Path(
+        os.environ.get(
+            "OC4D_ASSESSMENT_MAP_FILE",
+            str(project_root / "config/oc4d/assessment-map.csv"),
+        )
+    )
+    state_file = Path(
+        os.environ.get(
+            "OC4D_STATE_FILE",
+            str(assessments_root / "uploaded-state.json"),
+        )
+    )
+    source_dir = os.environ.get("OC4D_SOURCE_DIR", "").strip()
+    api_base = os.environ.get("OC4D_API_BASE_URL", "http://127.0.0.1:3000").strip()
+    api_token = os.environ.get("OC4D_API_TOKEN", "").strip()
+    api_take = int(os.environ.get("OC4D_API_TAKE", "2000"))
+
+    student_rows = load_mapping_file(student_map, ("source_student_name", "studentId", "parentOrg"))
+    assessment_rows = load_mapping_file(
+        assessment_map,
+        ("source_assessment_name", "assessmentId", "parentOrg"),
+    )
+    student_index = index_mapping(student_rows, "source_student_name")
+    assessment_index = index_mapping(assessment_rows, "source_assessment_name")
+    uploaded_ids = load_state(state_file)
+
+    all_entries: list[dict[str, Any]] = []
+
+    if source_dir:
+        source_path = Path(source_dir)
+        if source_path.is_dir():
+            all_entries.extend(
+                process_source_dir(
+                    source_path,
+                    student_index=student_index,
+                    assessment_index=assessment_index,
+                    default_parent_org=default_parent_org,
+                    staging_dir=staging_dir,
+                )
+            )
+
+    try:
+        payload = fetch_api_payload(api_base, api_token, api_take)
+        api_entries, _ = process_api_results(
+            payload,
+            student_index=student_index,
+            assessment_index=assessment_index,
+            default_parent_org=default_parent_org,
+            staging_dir=staging_dir,
+            uploaded_ids=uploaded_ids,
+        )
+        all_entries.extend(api_entries)
+    except RuntimeError as exc:
+        if not source_dir:
+            print(json.dumps({"error": str(exc), "counts": {"failed": 1}}))
+            return 1
+        print(json.dumps({"warn": str(exc), "source": "api"}))
+
+    manifest_path = write_manifest(staging_dir, all_entries)
+    print(json.dumps({"manifest": str(manifest_path), "staging_dir": str(staging_dir)}))
+    ready_count = sum(1 for entry in all_entries if entry.get("status") == "ready")
+    failed_count = sum(1 for entry in all_entries if entry.get("status") == "failed")
+    if ready_count == 0 and failed_count > 0:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -10,7 +10,7 @@ Key features
 
 - Scheduled runs via systemd timer (daily, weekly, monthly, custom, and hourly for Castle logs)
 - Offline-first uploads with queue flushing on the next successful run
-- Shared S3 destination logic for `RACHEL/`, `Kolibri/`, and `ModuleGaze/`
+- Shared S3 destination logic for `RACHEL/`, `Kolibri/`, `ModuleGaze/`, and OC4D assessment contract keys
 - ModuleGaze session log export from active `.log` files and daily `.log.zip` archives
 - Kolibri summary exports using the supported `kolibri manage exportlogs -l summary` CLI
 - Built-in workaround for Kolibri `0.19.2`, which crashes if `start_date` and `end_date` are omitted
@@ -25,10 +25,12 @@ Components
 - `configure.sh` - writes `config/automation.conf`, discovers buckets/subfolders, validates with a live test upload, and sets the schedule
 - `runner.sh` - orchestrates the pipeline, flushes queued uploads, and exports/upload Kolibri and ModuleGaze summaries
 - `status.sh` - health/status report: timer/service, queue contents, connectivity, AWS identity, last logs
-- `flush_queue.sh` - uploads queued CSVs for `RACHEL/`, `Kolibri/`, and `ModuleGaze/`
+- `flush_queue.sh` - uploads queued CSVs for `RACHEL/`, `Kolibri/`, `ModuleGaze/`, and `OC4DAssessments/`
 - `filter_time_based.py` - builds final CSVs for scheduled windows
 - `scripts/data/lib/s3_helpers.sh` - shared bucket, upload, and queue helpers
 - `scripts/data/lib/kolibri_helpers.sh` - shared Kolibri facility resolution and summary export helpers
+- `scripts/data/lib/oc4d_assessment_helpers.sh` - OC4D assessment key builder, API fetch, and contract-key upload/queue helpers
+- `scripts/data/process/processors/assessment.py` - fetches assessment results and emits validated CSV artifacts plus `manifest.json`
 
 Configuration (`config/automation.conf`)
 
@@ -42,6 +44,16 @@ Written by `configure.sh` and kept inside the repo so the automation can run fro
 - `RACHEL_SUBFOLDER`: optional subfolder under `.../RACHEL/` (for per-student server feeds)
 - `KOLIBRI_FACILITY_ID`: optional override; if omitted, Kolibri's default facility is used
 - `MODULEGAZE_ENABLED`: `1` to also process `/var/log/modulegaze`, `0` to skip it
+- `OC4D_ASSESSMENTS_ENABLED`: `1` to pull assessment results from the local OC4D API and upload to the OC4D reports bucket
+- `OC4D_API_BASE_URL`: base URL for `oc4d-server` (for example `http://127.0.0.1:3000`)
+- `OC4D_API_TOKEN`: optional Bearer token for super-admin API access
+- `OC4D_BUCKET`: destination bucket for assessment CSVs (default `oc4d-raw-reports`)
+- `OC4D_PARENT_ORG`: parent org prefix used in S3 keys (for example `Home-Schooling`)
+- `OC4D_UPLOAD_MODE`: `direct_s3` (default) or reserved `presigned_api`
+- `OC4D_SOURCE_DIR`: optional folder of pre-exported assessment CSV files
+- `OC4D_STUDENT_MAP_FILE`: CSV mapping local student identity to cloud `studentId`
+- `OC4D_ASSESSMENT_MAP_FILE`: CSV mapping local assessment identity to cloud `assessmentId`
+- `OC4D_STATE_FILE`: JSON state file tracking already-uploaded result IDs
 - `SCHEDULE_TYPE`: `hourly` (Castle only), `daily`, `weekly`, `monthly`, `yearly`, or `custom`
 - `RUN_INTERVAL`: for custom schedules (seconds, `>= 300`)
 
@@ -69,7 +81,15 @@ Data flow
 - Filters the summary using the same schedule window
 - Uploads to `S3_BUCKET/S3_SUBFOLDER/ModuleGaze/`, or queues in `00_DATA/00_UPLOAD_QUEUE/ModuleGaze/`
 
-4. Export and upload `Kolibri/`
+4. Pull and upload OC4D assessments
+
+- When enabled on Server v5/v6, fetches `GET /api/assessment-results?scope=all` from the configured OC4D API
+- Resolves cloud `studentId` and `assessmentId` via `config/oc4d/student-map.csv` and `config/oc4d/assessment-map.csv`
+- Builds validated CSV artifacts with header row plus one data row per result
+- Uploads to `OC4D_BUCKET` using strict keys: `{parentOrg}/Assessments/{studentId}/{assessmentId}/{base}__{isoTs}.csv`
+- If offline or upload fails, files are queued in `00_DATA/00_UPLOAD_QUEUE/OC4DAssessments/` with `.oc4dkey` sidecars
+
+5. Export and upload `Kolibri/`
 
 - Uses `kolibri manage exportlogs -l summary --start_date ... --end_date ...`
 - Exports land in `00_DATA/00_KOLIBRI_EXPORTS/`
@@ -83,6 +103,7 @@ Where things live
 - ModuleGaze raw runs: `00_DATA/<DEVICE_LOCATION>_modulegaze_logs_YYYY_MM_DD/`
 - Processed logs: `00_DATA/00_PROCESSED/<RUN_FOLDER>/`
 - Kolibri exports: `00_DATA/00_KOLIBRI_EXPORTS/`
+- OC4D assessment staging: `00_DATA/00_OC4D_ASSESSMENTS/`
 - Upload queue: `00_DATA/00_UPLOAD_QUEUE/`
 - Logs: `/var/log/v5_log_processor/automation.log` and `journalctl -u v5-log-processor.service`
 
@@ -94,6 +115,7 @@ Commands
 - Manual run (wrapper): `sudo /usr/local/bin/run_v5_log_processor.sh`
 - Manual Kolibri export/upload: `./scripts/data/upload/kolibri.sh`
 - Manual ModuleGaze upload: `./scripts/data/upload/modulegaze.sh`
+- Manual OC4D assessment pull/upload: `./scripts/data/upload/oc4d_assessments.sh`
 
 Troubleshooting
 
@@ -101,3 +123,5 @@ Troubleshooting
 - If uploads fail, the automation keeps the CSV in the matching queue folder for the next run
 - If Kolibri export fails on `0.19.2`, confirm the command still receives both `--start_date` and `--end_date`
 - If `KOLIBRI_FACILITY_ID` is not set, the scripts use Kolibri's default facility automatically
+- If OC4D assessment uploads fail validation, check mapping files under `config/oc4d/` and confirm the API token has super-admin scope for `scope=all`
+- OC4D queued uploads require both the CSV and its `.oc4dkey` sidecar in `OC4DAssessments/`

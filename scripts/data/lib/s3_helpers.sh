@@ -85,7 +85,7 @@ queue_dir_for_folder() {
 
 prepare_queue_dirs() {
   local queue_root="${1:?queue root required}"
-  mkdir -p "$queue_root" "$queue_root/RACHEL" "$queue_root/Kolibri" "$queue_root/ModuleGaze"
+  mkdir -p "$queue_root" "$queue_root/RACHEL" "$queue_root/Kolibri" "$queue_root/ModuleGaze" "$queue_root/OC4DAssessments"
 }
 
 queue_one() {
@@ -129,6 +129,7 @@ flush_queue_dir() {
 flush_all_queues() {
   local queue_root="${1:?queue root required}"
   local failed=0
+  local helpers_dir
 
   prepare_queue_dirs "$queue_root"
 
@@ -137,6 +138,13 @@ flush_all_queues() {
   flush_queue_dir "$queue_root/RACHEL" "RACHEL" || failed=1
   flush_queue_dir "$queue_root/Kolibri" "Kolibri" || failed=1
   flush_queue_dir "$queue_root/ModuleGaze" "ModuleGaze" || failed=1
+
+  helpers_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+  if [[ -f "$helpers_dir/oc4d_assessment_helpers.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$helpers_dir/oc4d_assessment_helpers.sh"
+    flush_oc4d_queue "$queue_root" || failed=1
+  fi
 
   return "$failed"
 }

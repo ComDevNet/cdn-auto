@@ -169,6 +169,16 @@ SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
 KOLIBRI_FACILITY_ID="${KOLIBRI_FACILITY_ID:-}"
 MODULEGAZE_ENABLED="${MODULEGAZE_ENABLED:-1}"
+OC4D_ASSESSMENTS_ENABLED="${OC4D_ASSESSMENTS_ENABLED:-0}"
+OC4D_API_BASE_URL="${OC4D_API_BASE_URL:-http://127.0.0.1:3000}"
+OC4D_API_TOKEN="${OC4D_API_TOKEN:-}"
+OC4D_BUCKET="${OC4D_BUCKET:-oc4d-raw-reports}"
+OC4D_PARENT_ORG="${OC4D_PARENT_ORG:-Home-Schooling}"
+OC4D_UPLOAD_MODE="${OC4D_UPLOAD_MODE:-direct_s3}"
+OC4D_SOURCE_DIR="${OC4D_SOURCE_DIR:-}"
+OC4D_STUDENT_MAP_FILE="${OC4D_STUDENT_MAP_FILE:-$PROJECT_ROOT/config/oc4d/student-map.csv}"
+OC4D_ASSESSMENT_MAP_FILE="${OC4D_ASSESSMENT_MAP_FILE:-$PROJECT_ROOT/config/oc4d/assessment-map.csv}"
+OC4D_STATE_FILE="${OC4D_STATE_FILE:-$PROJECT_ROOT/00_DATA/00_OC4D_ASSESSMENTS/uploaded-state.json}"
 
 ensure_preflight_ok || true
 
@@ -206,6 +216,28 @@ if confirm "Also collect/process/upload ModuleGaze logs when /var/log/modulegaze
   MODULEGAZE_ENABLED="1"
 else
   MODULEGAZE_ENABLED="0"
+fi
+
+if [[ "$SERVER_VERSION" == "v2" || "$SERVER_VERSION" == "v6" ]]; then
+  if confirm "Also pull OC4D assessment results from the local OC4D API and upload to the OC4D reports bucket?"; then
+    OC4D_ASSESSMENTS_ENABLED="1"
+    prompt_text "OC4D API base URL" "${OC4D_API_BASE_URL}" OC4D_API_BASE_URL
+    prompt_text "OC4D API token (Bearer; leave empty if not required)" "${OC4D_API_TOKEN}" OC4D_API_TOKEN
+    prompt_text "OC4D S3 bucket (name or s3://...)" "${OC4D_BUCKET}" OC4D_BUCKET
+    prompt_text "OC4D parent org (S3 key prefix)" "${OC4D_PARENT_ORG}" OC4D_PARENT_ORG
+    prompt_text "Student map CSV" "${OC4D_STUDENT_MAP_FILE}" OC4D_STUDENT_MAP_FILE
+    prompt_text "Assessment map CSV" "${OC4D_ASSESSMENT_MAP_FILE}" OC4D_ASSESSMENT_MAP_FILE
+    if confirm "Also scan a local folder for pre-exported assessment CSV files?"; then
+      prompt_text "OC4D source directory (optional)" "${OC4D_SOURCE_DIR}" OC4D_SOURCE_DIR
+    else
+      OC4D_SOURCE_DIR=""
+    fi
+    OC4D_UPLOAD_MODE="direct_s3"
+  else
+    OC4D_ASSESSMENTS_ENABLED="0"
+  fi
+else
+  OC4D_ASSESSMENTS_ENABLED="0"
 fi
 
 while :; do
@@ -332,6 +364,10 @@ RACHEL subfolder: ${RACHEL_SUBFOLDER:-<RACHEL root>}
 Schedule       : $SCHEDULE_TYPE (interval=${RUN_INTERVAL}s)
 Kolibri facility: ${KOLIBRI_FACILITY_ID:-<default facility>}
 ModuleGaze     : $([[ "$MODULEGAZE_ENABLED" == "1" ]] && echo enabled || echo disabled)
+OC4D assessments: $([[ "$OC4D_ASSESSMENTS_ENABLED" == "1" ]] && echo enabled || echo disabled)
+OC4D API       : ${OC4D_API_BASE_URL:-<unset>}
+OC4D bucket    : ${OC4D_BUCKET:-oc4d-raw-reports}
+OC4D parentOrg : ${OC4D_PARENT_ORG:-Home-Schooling}
 Config file    : $CONFIG_FILE
 EOF
 )
@@ -352,6 +388,16 @@ SCHEDULE_TYPE="$SCHEDULE_TYPE"
 RUN_INTERVAL="$RUN_INTERVAL"
 KOLIBRI_FACILITY_ID="$KOLIBRI_FACILITY_ID"
 MODULEGAZE_ENABLED="$MODULEGAZE_ENABLED"
+OC4D_ASSESSMENTS_ENABLED="$OC4D_ASSESSMENTS_ENABLED"
+OC4D_API_BASE_URL="$OC4D_API_BASE_URL"
+OC4D_API_TOKEN="$OC4D_API_TOKEN"
+OC4D_BUCKET="$OC4D_BUCKET"
+OC4D_PARENT_ORG="$OC4D_PARENT_ORG"
+OC4D_UPLOAD_MODE="$OC4D_UPLOAD_MODE"
+OC4D_SOURCE_DIR="$OC4D_SOURCE_DIR"
+OC4D_STUDENT_MAP_FILE="$OC4D_STUDENT_MAP_FILE"
+OC4D_ASSESSMENT_MAP_FILE="$OC4D_ASSESSMENT_MAP_FILE"
+OC4D_STATE_FILE="$OC4D_STATE_FILE"
 EOF
 mv -f "$tmp" "$CONFIG_FILE"
 sudo chown "${SERVICE_USER}:${SERVICE_GROUP}" "$CONFIG_FILE"

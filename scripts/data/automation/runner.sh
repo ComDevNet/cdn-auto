@@ -11,6 +11,7 @@ cd "$PROJECT_ROOT"
 
 source "$PROJECT_ROOT/scripts/data/lib/s3_helpers.sh"
 source "$PROJECT_ROOT/scripts/data/lib/kolibri_helpers.sh"
+source "$PROJECT_ROOT/scripts/data/lib/oc4d_assessment_helpers.sh"
 
 CONFIG_FILE="$PROJECT_ROOT/config/automation.conf"
 
@@ -50,6 +51,16 @@ SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
 KOLIBRI_FACILITY_ID="${KOLIBRI_FACILITY_ID:-}"
 MODULEGAZE_ENABLED="${MODULEGAZE_ENABLED:-1}"
+OC4D_ASSESSMENTS_ENABLED="${OC4D_ASSESSMENTS_ENABLED:-0}"
+OC4D_API_BASE_URL="${OC4D_API_BASE_URL:-http://127.0.0.1:3000}"
+OC4D_API_TOKEN="${OC4D_API_TOKEN:-}"
+OC4D_BUCKET="${OC4D_BUCKET:-oc4d-raw-reports}"
+OC4D_PARENT_ORG="${OC4D_PARENT_ORG:-Home-Schooling}"
+OC4D_UPLOAD_MODE="${OC4D_UPLOAD_MODE:-direct_s3}"
+OC4D_SOURCE_DIR="${OC4D_SOURCE_DIR:-}"
+OC4D_STUDENT_MAP_FILE="${OC4D_STUDENT_MAP_FILE:-$PROJECT_ROOT/config/oc4d/student-map.csv}"
+OC4D_ASSESSMENT_MAP_FILE="${OC4D_ASSESSMENT_MAP_FILE:-$PROJECT_ROOT/config/oc4d/assessment-map.csv}"
+OC4D_STATE_FILE="${OC4D_STATE_FILE:-$PROJECT_ROOT/00_DATA/00_OC4D_ASSESSMENTS/uploaded-state.json}"
 
 DATA_DIR="$PROJECT_ROOT/00_DATA"
 PROCESSED_ROOT="$DATA_DIR/00_PROCESSED"
@@ -243,6 +254,119 @@ process_modulegaze_logs() {
 }
 
 process_modulegaze_logs
+
+process_oc4d_assessments() {
+  if ! oc4d_assessments_enabled; then
+    log "[oc4d] Disabled in config. Skipping."
+    return 0
+  fi
+
+  if [[ "${OC4D_UPLOAD_MODE:-direct_s3}" != "direct_s3" ]]; then
+    log "[oc4d][warn] Upload mode '${OC4D_UPLOAD_MODE}' is not implemented yet; using direct_s3."
+  fi
+
+  local assessments_root="$DATA_DIR/00_OC4D_ASSESSMENTS"
+  local manifest_path=""
+  local processor_rc=0
+  local uploaded=0 skipped=0 failed=0 queued=0
+  local new_uploaded_ids=()
+
+  mkdir -p "$assessments_root"
+  log "[oc4d][process] scripts/data/process/processors/assessment.py"
+  OC4D_API_BASE_URL="$OC4D_API_BASE_URL" \
+  OC4D_API_TOKEN="$OC4D_API_TOKEN" \
+  OC4D_PARENT_ORG="$OC4D_PARENT_ORG" \
+  OC4D_SOURCE_DIR="$OC4D_SOURCE_DIR" \
+  OC4D_STUDENT_MAP_FILE="$OC4D_STUDENT_MAP_FILE" \
+  OC4D_ASSESSMENT_MAP_FILE="$OC4D_ASSESSMENT_MAP_FILE" \
+  OC4D_STATE_FILE="$OC4D_STATE_FILE" \
+    python3 "scripts/data/process/processors/assessment.py" || processor_rc=$?
+
+  manifest_path="$(find "$assessments_root" -maxdepth 2 -type f -name 'manifest.json' | sort | tail -n1)"
+  if [[ -z "$manifest_path" || ! -f "$manifest_path" ]]; then
+    if (( processor_rc != 0 )); then
+      log "[oc4d][warn] Assessment processor failed and no manifest was produced."
+    else
+      log "[oc4d] No assessment manifest produced for this run."
+    fi
+    return 0
+  fi
+
+  while IFS=$'\t' read -r csv_path s3_key result_id; do
+    [[ -n "$csv_path" && -f "$csv_path" ]] || continue
+    if (( ONLINE )); then
+      if upload_oc4d_one "$csv_path" "$s3_key"; then
+        uploaded=$((uploaded + 1))
+        [[ -n "$result_id" ]] && new_uploaded_ids+=("$result_id")
+      else
+        queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key"
+        queued=$((queued + 1))
+        failed=$((failed + 1))
+      fi
+    else
+      queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key"
+      queued=$((queued + 1))
+    fi
+  done < <(
+    python3 - "$manifest_path" <<'PY'
+import json
+import sys
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+for entry in manifest.get("ready", []):
+    print(
+        "\t".join(
+            [
+                entry.get("csv", ""),
+                entry.get("s3_key", ""),
+                entry.get("result_id", ""),
+            ]
+        )
+    )
+PY
+  )
+
+  skipped="$(python3 - "$manifest_path" <<'PY'
+import json, sys
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+print(len(manifest.get("skipped", [])))
+PY
+)"
+  failed=$((failed + $(python3 - "$manifest_path" <<'PY'
+import json, sys
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+print(len(manifest.get("failed", [])))
+PY
+)))
+
+  if (( ${#new_uploaded_ids[@]} > 0 )); then
+    python3 - "$OC4D_STATE_FILE" "${new_uploaded_ids[@]}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+state_path = Path(sys.argv[1])
+ids = [item for item in sys.argv[2:] if item]
+uploaded = set()
+if state_path.exists():
+    try:
+        uploaded = set(json.loads(state_path.read_text(encoding="utf-8")).get("uploadedIds", []))
+    except json.JSONDecodeError:
+        uploaded = set()
+uploaded.update(ids)
+state_path.parent.mkdir(parents=True, exist_ok=True)
+state_path.write_text(json.dumps({"uploadedIds": sorted(uploaded)}, indent=2) + "\n", encoding="utf-8")
+PY
+  fi
+
+  log "[oc4d][report] uploaded=$uploaded queued=$queued skipped=$skipped failed=$failed"
+  if (( failed > 0 )); then
+    log "[oc4d][warn] Assessment stage finished with validation/upload failures."
+  fi
+  return 0
+}
+
+process_oc4d_assessments
 
 OVERALL_FAIL=0
 

@@ -8,6 +8,7 @@ Python scripts that parse logs and build summary.csv.
 - [dhub.py](./dhub.py) — D-Hub (Server v3) UUID-based module logs
 - [log-v6.py](./log-v6.py) — Server v6 (OC4D with module paths) logs
 - [modulegaze.py](./modulegaze.py) — ModuleGaze session logs from `/var/log/modulegaze`
+- [assessment.py](./assessment.py) — OC4D assessment results from the local API and optional source CSV folder
 
 Implementation notes
 

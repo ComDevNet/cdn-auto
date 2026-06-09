@@ -1,0 +1,3 @@
+source_student_name,studentId,parentOrg
+# Example: match by email, username, display name, or local server user UUID
+# student@example.com,cloud-student-uuid,Home-Schooling

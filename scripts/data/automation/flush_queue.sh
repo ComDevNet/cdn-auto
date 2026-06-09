@@ -39,7 +39,8 @@ prepare_queue_dirs "$QUEUE_DIR"
 if ! compgen -G "$QUEUE_DIR/*.csv" >/dev/null \
   && ! compgen -G "$QUEUE_DIR/RACHEL/*.csv" >/dev/null \
   && ! compgen -G "$QUEUE_DIR/Kolibri/*.csv" >/dev/null \
-  && ! compgen -G "$QUEUE_DIR/ModuleGaze/*.csv" >/dev/null; then
+  && ! compgen -G "$QUEUE_DIR/ModuleGaze/*.csv" >/dev/null \
+  && ! compgen -G "$QUEUE_DIR/OC4DAssessments/*.csv" >/dev/null; then
   log "Queue empty at $QUEUE_DIR"
   exit 0
 fi
