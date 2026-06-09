@@ -182,6 +182,7 @@ OC4D_SOURCE_DIR="${OC4D_SOURCE_DIR:-}"
 OC4D_STUDENT_MAP_FILE="${OC4D_STUDENT_MAP_FILE:-$PROJECT_ROOT/config/oc4d/student-map.csv}"
 OC4D_ASSESSMENT_MAP_FILE="${OC4D_ASSESSMENT_MAP_FILE:-$PROJECT_ROOT/config/oc4d/assessment-map.csv}"
 OC4D_STATE_FILE="${OC4D_STATE_FILE:-$PROJECT_ROOT/00_DATA/00_OC4D_ASSESSMENTS/uploaded-state.json}"
+OC4D_UNASSIGNED_STUDENT_ID="${OC4D_UNASSIGNED_STUDENT_ID:-unassigned}"
 
 ensure_preflight_ok || true
 
@@ -243,6 +244,7 @@ if [[ "$SERVER_VERSION" == "v2" || "$SERVER_VERSION" == "v6" ]]; then
     OC4D_UPLOAD_MODE="direct_s3"
     say "OC4D API: ${OC4D_API_BASE_URL} (local; token auto-fetched at runtime)"
     say "OC4D maps: ${OC4D_STUDENT_MAP_FILE} and ${OC4D_ASSESSMENT_MAP_FILE}"
+    say "OC4D unmapped students upload to: ${OC4D_UNASSIGNED_STUDENT_ID} (assign in cloud /admin/students)"
     pick_oc4d_bucket
     pick_oc4d_parent_org
   else
@@ -349,6 +351,7 @@ OC4D_SOURCE_DIR="$OC4D_SOURCE_DIR"
 OC4D_STUDENT_MAP_FILE="$OC4D_STUDENT_MAP_FILE"
 OC4D_ASSESSMENT_MAP_FILE="$OC4D_ASSESSMENT_MAP_FILE"
 OC4D_STATE_FILE="$OC4D_STATE_FILE"
+OC4D_UNASSIGNED_STUDENT_ID="$OC4D_UNASSIGNED_STUDENT_ID"
 EOF
 mv -f "$tmp" "$CONFIG_FILE"
 sudo chown "${SERVICE_USER}:${SERVICE_GROUP}" "$CONFIG_FILE"

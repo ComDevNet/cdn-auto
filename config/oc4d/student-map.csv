@@ -1,3 +1,9 @@
 source_student_name,studentId,parentOrg
-# Example: match by email, username, display name, or local server user UUID
-# student@example.com,cloud-student-uuid,Home-Schooling
+testing@comdevnet.com,testing-1,Testing
+testing1,testing-1,Testing
+47a857ec-4d29-41e9-b294-37846d4eadcc,testing-1,Testing
+Testing Student 1,testing-1,Testing
+testing2@comdevnet.com,testing-2,Testing
+testing2,testing-2,Testing
+5c5e2b50-232b-40ff-a252-d6b1c0dbf1eb,testing-2,Testing
+Testing Student 2,testing-2,Testing

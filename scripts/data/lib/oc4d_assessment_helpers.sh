@@ -90,6 +90,31 @@ validate_oc4d_assessment_key() {
   return 0
 }
 
+validate_oc4d_marking_scheme_key() {
+  local key="$1"
+  if [[ -z "$key" ]]; then
+    echo "missing object key"
+    return 1
+  fi
+  if [[ "$key" == */MarkingSchemes/*/*.csv || "$key" == */MarkingSchemes/*/*.json ]]; then
+    return 0
+  fi
+  echo "key must match {parentOrg}/MarkingSchemes/{assessmentId}/{filename}.csv or .json"
+  return 1
+}
+
+validate_oc4d_upload_key() {
+  local key="$1"
+  if validate_oc4d_assessment_key "$key" 2>/dev/null; then
+    return 0
+  fi
+  if validate_oc4d_marking_scheme_key "$key" 2>/dev/null; then
+    return 0
+  fi
+  echo "key must match an OC4D assessment result or marking scheme path"
+  return 1
+}
+
 oc4d_assessments_enabled() {
   [[ "${OC4D_ASSESSMENTS_ENABLED:-0}" == "1" || "${OC4D_ASSESSMENTS_ENABLED:-false}" == "true" ]]
 }
@@ -108,7 +133,7 @@ upload_oc4d_one() {
   local s3_key="$2"
   local bucket remote_path output rc reason
 
-  reason="$(validate_oc4d_assessment_key "$s3_key")" || {
+  reason="$(validate_oc4d_upload_key "$s3_key")" || {
     log "[oc4d][error] Invalid key for $(basename "$file_path"): $reason"
     return 1
   }

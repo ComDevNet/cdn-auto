@@ -61,6 +61,7 @@ OC4D_SOURCE_DIR="${OC4D_SOURCE_DIR:-}"
 OC4D_STUDENT_MAP_FILE="${OC4D_STUDENT_MAP_FILE:-$PROJECT_ROOT/config/oc4d/student-map.csv}"
 OC4D_ASSESSMENT_MAP_FILE="${OC4D_ASSESSMENT_MAP_FILE:-$PROJECT_ROOT/config/oc4d/assessment-map.csv}"
 OC4D_STATE_FILE="${OC4D_STATE_FILE:-$PROJECT_ROOT/00_DATA/00_OC4D_ASSESSMENTS/uploaded-state.json}"
+OC4D_UNASSIGNED_STUDENT_ID="${OC4D_UNASSIGNED_STUDENT_ID:-unassigned}"
 
 DATA_DIR="$PROJECT_ROOT/00_DATA"
 PROCESSED_ROOT="$DATA_DIR/00_PROCESSED"
@@ -280,6 +281,7 @@ process_oc4d_assessments() {
   OC4D_STUDENT_MAP_FILE="$OC4D_STUDENT_MAP_FILE" \
   OC4D_ASSESSMENT_MAP_FILE="$OC4D_ASSESSMENT_MAP_FILE" \
   OC4D_STATE_FILE="$OC4D_STATE_FILE" \
+  OC4D_UNASSIGNED_STUDENT_ID="$OC4D_UNASSIGNED_STUDENT_ID" \
     python3 "scripts/data/process/processors/assessment.py" || processor_rc=$?
 
   manifest_path="$(find "$assessments_root" -maxdepth 2 -type f -name 'manifest.json' | sort | tail -n1)"
@@ -291,6 +293,57 @@ process_oc4d_assessments() {
     fi
     return 0
   fi
+
+  while IFS=$'\t' read -r file_path s3_key _scheme_id; do
+    [[ -n "$file_path" && -f "$file_path" ]] || continue
+    if (( ONLINE )); then
+      upload_oc4d_one "$file_path" "$s3_key" || {
+        queue_oc4d_one "$file_path" "$QUEUE_DIR" "$s3_key"
+        queued=$((queued + 1))
+        failed=$((failed + 1))
+      }
+    else
+      queue_oc4d_one "$file_path" "$QUEUE_DIR" "$s3_key"
+      queued=$((queued + 1))
+    fi
+  done < <(
+    python3 - "$manifest_path" <<'PY'
+import json
+import sys
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+for entry in manifest.get("marking_schemes", []):
+    subject_json = entry.get("subject_json", "")
+    subject_s3_key = entry.get("subject_s3_key", "")
+    if subject_json and subject_s3_key:
+        print("\t".join([subject_json, subject_s3_key, ""]))
+PY
+  )
+
+  while IFS=$'\t' read -r csv_path s3_key _scheme_id; do
+    [[ -n "$csv_path" && -f "$csv_path" ]] || continue
+    if (( ONLINE )); then
+      if upload_oc4d_one "$csv_path" "$s3_key"; then
+        uploaded=$((uploaded + 1))
+      else
+        queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key"
+        queued=$((queued + 1))
+        failed=$((failed + 1))
+      fi
+    else
+      queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key"
+      queued=$((queued + 1))
+    fi
+  done < <(
+    python3 - "$manifest_path" <<'PY'
+import json
+import sys
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+for entry in manifest.get("marking_schemes", []):
+    print("\t".join([entry.get("csv", ""), entry.get("s3_key", ""), ""]))
+PY
+  )
 
   while IFS=$'\t' read -r csv_path s3_key result_id; do
     [[ -n "$csv_path" && -f "$csv_path" ]] || continue

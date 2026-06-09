@@ -120,6 +120,30 @@ def resolve_student_mapping(
     )
 
 
+def resolve_student_id(
+    student_index: dict[str, dict[str, str]],
+    default_parent_org: str,
+    unassigned_student_id: str,
+    *,
+    user_id: str = "",
+    user_name: str = "",
+    user_email: str = "",
+    user_username: str = "",
+) -> tuple[str, str, bool]:
+    try:
+        student_id, parent_org = resolve_student_mapping(
+            student_index,
+            default_parent_org,
+            user_id=user_id,
+            user_name=user_name,
+            user_email=user_email,
+            user_username=user_username,
+        )
+        return student_id, parent_org, False
+    except KeyError:
+        return unassigned_student_id, default_parent_org, True
+
+
 def resolve_assessment_mapping(
     assessment_index: dict[str, dict[str, str]],
     default_parent_org: str,
@@ -214,10 +238,24 @@ def write_result_csv(
     timestamp: str,
     questions: list[dict[str, Any]],
     answers: Any,
+    source_identity: dict[str, str] | None = None,
 ) -> None:
     headers = ["Timestamp"]
+    if source_identity:
+        headers.extend(
+            ["Source Email", "Source Username", "Source Name", "Source User Id"]
+        )
     headers.extend((q.get("prompt") or f"Question {idx + 1}").strip() for idx, q in enumerate(questions))
     row = [timestamp]
+    if source_identity:
+        row.extend(
+            [
+                source_identity.get("email", ""),
+                source_identity.get("username", ""),
+                source_identity.get("name", ""),
+                source_identity.get("user_id", ""),
+            ]
+        )
     for idx, question in enumerate(questions):
         row.append(selected_answer_for(answers, question, idx))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -313,6 +351,7 @@ def process_api_results(
     student_index: dict[str, dict[str, str]],
     assessment_index: dict[str, dict[str, str]],
     default_parent_org: str,
+    unassigned_student_id: str,
     staging_dir: Path,
     uploaded_ids: set[str],
 ) -> tuple[list[dict[str, Any]], set[str]]:
@@ -322,7 +361,7 @@ def process_api_results(
         raise ValueError("API payload field 'data' must be an array")
 
     manifest_entries: list[dict[str, Any]] = []
-    counts = {"uploaded": 0, "skipped": 0, "failed": 0}
+    counts = {"uploaded": 0, "unassigned": 0, "skipped": 0, "failed": 0}
 
     for result in results:
         if not isinstance(result, dict):
@@ -352,9 +391,10 @@ def process_api_results(
         answers = result.get("answers")
 
         try:
-            student_id, parent_org = resolve_student_mapping(
+            student_id, parent_org, is_unassigned = resolve_student_id(
                 student_index,
                 default_parent_org,
+                unassigned_student_id,
                 user_id=user_id,
                 user_name=user_name,
                 user_email=user_email,
@@ -381,7 +421,21 @@ def process_api_results(
             )
             file_name = s3_key.split("/")[-1]
             csv_path = staging_dir / file_name
-            write_result_csv(csv_path, created_at, questions, answers)
+            source_identity = None
+            if is_unassigned:
+                source_identity = {
+                    "email": user_email,
+                    "username": user_username,
+                    "name": user_name,
+                    "user_id": user_id,
+                }
+            write_result_csv(
+                csv_path,
+                created_at,
+                questions,
+                answers,
+                source_identity=source_identity,
+            )
 
             manifest_entries.append(
                 {
@@ -389,8 +443,11 @@ def process_api_results(
                     "result_id": result_id,
                     "csv": str(csv_path),
                     "s3_key": s3_key,
+                    "unassigned": is_unassigned,
                 }
             )
+            if is_unassigned:
+                counts["unassigned"] += 1
             counts["uploaded"] += 1
         except (KeyError, ValueError) as exc:
             counts["failed"] += 1
@@ -506,18 +563,183 @@ def process_source_dir(
     return manifest_entries
 
 
+def pi_correct_answer(question: dict[str, Any]) -> str:
+    options = question.get("options") or []
+    idx = question.get("correctAnswerIndex")
+    if isinstance(idx, int) and isinstance(options, list) and 0 <= idx < len(options):
+        return str(options[idx]).strip()
+    return "-"
+
+
+def subject_name_from_assessment(assessment: dict[str, Any]) -> tuple[str, str]:
+    """Return (subject_name, module_name) using Pi category, then module, then title."""
+    module = assessment.get("module") if isinstance(assessment.get("module"), dict) else {}
+    module_name = str(module.get("name") or "").strip()
+    categories = module.get("categories")
+    if isinstance(categories, list):
+        category_names = [
+            str(item.get("name") or "").strip()
+            for item in categories
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        ]
+        if category_names:
+            return category_names[0], module_name
+    if module_name:
+        return module_name, module_name
+    title = str(assessment.get("title") or "").strip()
+    if title:
+        return title, module_name
+    return "General", module_name
+
+
+def write_subject_meta_json(
+    path: Path,
+    *,
+    subject_name: str,
+    module_name: str = "",
+    assessment_name: str = "",
+) -> None:
+    payload = {
+        "subjectName": subject_name,
+        "moduleName": module_name,
+        "assessmentName": assessment_name,
+        "source": "pi-sync",
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def write_marking_scheme_csv(path: Path, questions: list[dict[str, Any]]) -> None:
+    headers: list[str] = []
+    answers: list[str] = []
+    for idx, question in enumerate(questions):
+        prompt = str(question.get("prompt") or "").strip() or f"Question {idx + 1}"
+        headers.append(prompt)
+        answers.append(pi_correct_answer(question))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(headers)
+        writer.writerow(answers)
+    validate_csv_file(path)
+
+
+def process_marking_schemes(
+    payload: dict[str, Any],
+    *,
+    assessment_index: dict[str, dict[str, str]],
+    default_parent_org: str,
+    staging_dir: Path,
+) -> list[dict[str, Any]]:
+    questions_by_assessment = payload.get("questionsByAssessmentId") or {}
+    results = payload.get("data") or []
+    if not isinstance(questions_by_assessment, dict):
+        raise ValueError("API payload field 'questionsByAssessmentId' must be an object")
+
+    title_by_pi_id: dict[str, str] = {}
+    subject_by_pi_id: dict[str, str] = {}
+    module_by_pi_id: dict[str, str] = {}
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        assessment = result.get("assessment") or {}
+        if not isinstance(assessment, dict):
+            assessment = {}
+        pi_assessment_id = str(result.get("assessmentId") or assessment.get("id") or "").strip()
+        assessment_title = str(assessment.get("title") or "").strip()
+        if pi_assessment_id and assessment_title and pi_assessment_id not in title_by_pi_id:
+            title_by_pi_id[pi_assessment_id] = assessment_title
+        if pi_assessment_id and pi_assessment_id not in subject_by_pi_id:
+            subject_name, module_name = subject_name_from_assessment(assessment)
+            subject_by_pi_id[pi_assessment_id] = subject_name
+            module_by_pi_id[pi_assessment_id] = module_name
+
+    manifest_entries: list[dict[str, Any]] = []
+    counts = {"ready": 0, "failed": 0}
+
+    for pi_assessment_id, questions in questions_by_assessment.items():
+        if not isinstance(questions, list) or not questions:
+            continue
+        assessment_title = title_by_pi_id.get(pi_assessment_id, pi_assessment_id)
+        try:
+            cloud_assessment_id, parent_org = resolve_assessment_mapping(
+                assessment_index,
+                default_parent_org,
+                assessment_id=pi_assessment_id,
+                assessment_title=assessment_title,
+            )
+            parent_org = parent_org or default_parent_org
+            csv_path = staging_dir / f"marking-scheme-{cloud_assessment_id}.csv"
+            write_marking_scheme_csv(csv_path, questions)
+            subject_name = subject_by_pi_id.get(pi_assessment_id, "General")
+            module_name = module_by_pi_id.get(pi_assessment_id, "")
+            subject_json_path = staging_dir / f"marking-scheme-{cloud_assessment_id}.subject.json"
+            write_subject_meta_json(
+                subject_json_path,
+                subject_name=subject_name,
+                module_name=module_name,
+                assessment_name=assessment_title,
+            )
+            scheme_prefix = (
+                f"{normalize_key_segment(parent_org)}/MarkingSchemes/"
+                f"{normalize_key_segment(cloud_assessment_id)}"
+            )
+            s3_key = f"{scheme_prefix}/pi-sync-marking-scheme.csv"
+            subject_s3_key = f"{scheme_prefix}/pi-sync-subject.json"
+            manifest_entries.append(
+                {
+                    "status": "ready",
+                    "kind": "marking-scheme",
+                    "pi_assessment_id": pi_assessment_id,
+                    "assessment_id": cloud_assessment_id,
+                    "assessment_name": assessment_title,
+                    "subject_name": subject_name,
+                    "module_name": module_name,
+                    "csv": str(csv_path),
+                    "s3_key": s3_key,
+                    "subject_json": str(subject_json_path),
+                    "subject_s3_key": subject_s3_key,
+                }
+            )
+            counts["ready"] += 1
+        except (KeyError, ValueError) as exc:
+            counts["failed"] += 1
+            manifest_entries.append(
+                {
+                    "status": "failed",
+                    "kind": "marking-scheme",
+                    "pi_assessment_id": pi_assessment_id,
+                    "reason": str(exc),
+                }
+            )
+
+    print(json.dumps({"source": "marking-schemes", "counts": counts, "entries": manifest_entries}))
+    return manifest_entries
+
+
 def write_manifest(staging_dir: Path, entries: list[dict[str, Any]]) -> Path:
     manifest_path = staging_dir / "manifest.json"
-    ready = [entry for entry in entries if entry.get("status") == "ready"]
+    ready = [
+        entry
+        for entry in entries
+        if entry.get("status") == "ready" and entry.get("kind") != "marking-scheme"
+    ]
+    marking_schemes = [
+        entry
+        for entry in entries
+        if entry.get("status") == "ready" and entry.get("kind") == "marking-scheme"
+    ]
     failed = [entry for entry in entries if entry.get("status") == "failed"]
     skipped = [entry for entry in entries if entry.get("status") == "skipped"]
     payload = {
         "generatedAt": utc_now_iso(),
         "ready": ready,
+        "marking_schemes": marking_schemes,
         "failed": failed,
         "skipped": skipped,
         "counts": {
             "ready": len(ready),
+            "marking_schemes": len(marking_schemes),
             "failed": len(failed),
             "skipped": len(skipped),
         },
@@ -535,6 +757,7 @@ def main() -> int:
     staging_dir.mkdir(parents=True, exist_ok=True)
 
     default_parent_org = os.environ.get("OC4D_PARENT_ORG", "Home-Schooling").strip()
+    unassigned_student_id = os.environ.get("OC4D_UNASSIGNED_STUDENT_ID", "unassigned").strip() or "unassigned"
     student_map = Path(
         os.environ.get(
             "OC4D_STUDENT_MAP_FILE",
@@ -584,11 +807,20 @@ def main() -> int:
 
     try:
         payload = fetch_api_payload(api_base, api_token, api_take)
+        all_entries.extend(
+            process_marking_schemes(
+                payload,
+                assessment_index=assessment_index,
+                default_parent_org=default_parent_org,
+                staging_dir=staging_dir,
+            )
+        )
         api_entries, _ = process_api_results(
             payload,
             student_index=student_index,
             assessment_index=assessment_index,
             default_parent_org=default_parent_org,
+            unassigned_student_id=unassigned_student_id,
             staging_dir=staging_dir,
             uploaded_ids=uploaded_ids,
         )
