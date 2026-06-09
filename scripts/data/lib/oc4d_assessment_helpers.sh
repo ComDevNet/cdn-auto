@@ -175,9 +175,51 @@ flush_oc4d_queue() {
   return "$failed"
 }
 
-fetch_oc4d_assessment_payload() {
+resolve_oc4d_api_token() {
   local api_base="${OC4D_API_BASE_URL:-http://127.0.0.1:3000}"
   local token="${OC4D_API_TOKEN:-}"
+  local identifier="${OC4D_API_IDENTIFIER:-admin@comdevnet.com}"
+  local password="${OC4D_API_PASSWORD:-CDN2025!}"
+  local creds_file="${OC4D_API_CREDENTIALS_FILE:-}"
+  local response
+
+  if [[ -n "$token" ]]; then
+    printf '%s' "$token"
+    return 0
+  fi
+
+  if [[ -n "$creds_file" && -r "$creds_file" ]]; then
+    # shellcheck disable=SC1090
+    source "$creds_file"
+    identifier="${OC4D_API_IDENTIFIER:-$identifier}"
+    password="${OC4D_API_PASSWORD:-$password}"
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "curl is required to authenticate with the local OC4D API" >&2
+    return 1
+  fi
+
+  api_base="${api_base%/}"
+  response="$(curl -fsS -X POST "${api_base}/api/authentication" \
+    -H "Content-Type: application/json" \
+    -d "{\"identifier\":\"${identifier}\",\"password\":\"${password}\"}" 2>&1)" || {
+    echo "failed to authenticate with local OC4D API at ${api_base}" >&2
+    return 1
+  }
+
+  token="$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("accessToken",""))' 2>/dev/null || true)"
+  if [[ -z "$token" ]]; then
+    echo "local OC4D API authentication did not return an accessToken" >&2
+    return 1
+  fi
+
+  printf '%s' "$token"
+}
+
+fetch_oc4d_assessment_payload() {
+  local api_base="${OC4D_API_BASE_URL:-http://127.0.0.1:3000}"
+  local token=""
   local take="${OC4D_API_TAKE:-2000}"
   local out_file="$1"
   local url auth_header=()
@@ -185,14 +227,13 @@ fetch_oc4d_assessment_payload() {
   api_base="${api_base%/}"
   url="${api_base}/api/assessment-results?scope=all&take=${take}"
 
-  if [[ -n "$token" ]]; then
-    auth_header=(-H "Authorization: Bearer ${token}")
-  fi
-
   if ! command -v curl >/dev/null 2>&1; then
     echo "curl is required to fetch OC4D assessment results" >&2
     return 1
   fi
+
+  token="$(resolve_oc4d_api_token)" || return 1
+  auth_header=(-H "Authorization: Bearer ${token}")
 
   if ! curl -fsS "${auth_header[@]}" "$url" -o "$out_file"; then
     echo "failed to fetch assessment results from ${url}" >&2

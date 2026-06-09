@@ -245,12 +245,53 @@ def save_state(path: Path, uploaded_ids: set[str]) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def resolve_api_token(api_base: str, token: str) -> str:
+    if token:
+        return token
+
+    identifier = os.environ.get("OC4D_API_IDENTIFIER", "admin@comdevnet.com").strip()
+    password = os.environ.get("OC4D_API_PASSWORD", "CDN2025!").strip()
+    creds_file = os.environ.get("OC4D_API_CREDENTIALS_FILE", "").strip()
+    if creds_file and Path(creds_file).is_file():
+        for line in Path(creds_file).read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key == "OC4D_API_IDENTIFIER" and value:
+                identifier = value
+            elif key == "OC4D_API_PASSWORD" and value:
+                password = value
+
+    auth_url = f"{api_base.rstrip('/')}/api/authentication"
+    payload = json.dumps({"identifier": identifier, "password": password}).encode("utf-8")
+    request = urllib.request.Request(
+        auth_url,
+        data=payload,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Local OC4D API auth failed ({exc.code}): {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Local OC4D API auth failed: {exc}") from exc
+
+    access_token = str(body.get("accessToken") or "").strip()
+    if not access_token:
+        raise RuntimeError("Local OC4D API auth did not return accessToken")
+    return access_token
+
+
 def fetch_api_payload(api_base: str, token: str, take: int) -> dict[str, Any]:
     api_base = api_base.rstrip("/")
     url = f"{api_base}/api/assessment-results?scope=all&take={take}"
-    headers = {"Accept": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    headers = {"Accept": "application/json", "Authorization": f"Bearer {resolve_api_token(api_base, token)}"}
     request = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=60) as response:

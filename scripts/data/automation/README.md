@@ -45,8 +45,9 @@ Written by `configure.sh` and kept inside the repo so the automation can run fro
 - `KOLIBRI_FACILITY_ID`: optional override; if omitted, Kolibri's default facility is used
 - `MODULEGAZE_ENABLED`: `1` to also process `/var/log/modulegaze`, `0` to skip it
 - `OC4D_ASSESSMENTS_ENABLED`: `1` to pull assessment results from the local OC4D API and upload to the OC4D reports bucket
-- `OC4D_API_BASE_URL`: base URL for `oc4d-server` (for example `http://127.0.0.1:3000`)
-- `OC4D_API_TOKEN`: optional Bearer token for super-admin API access
+- `OC4D_API_BASE_URL`: local `oc4d-server` URL (default `http://127.0.0.1:3000`; not prompted during configure)
+- `OC4D_API_TOKEN`: optional override; when empty, the runner auto-authenticates against the local API using the seeded super-admin account
+- `OC4D_API_IDENTIFIER` / `OC4D_API_PASSWORD`: optional overrides if the local admin password was changed
 - `OC4D_BUCKET`: destination bucket for assessment CSVs (default `oc4d-raw-reports`)
 - `OC4D_PARENT_ORG`: parent org prefix used in S3 keys (for example `Home-Schooling`)
 - `OC4D_UPLOAD_MODE`: `direct_s3` (default) or reserved `presigned_api`
