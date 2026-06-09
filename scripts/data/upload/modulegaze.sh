@@ -1,5 +1,9 @@
 #!/bin/bash
 
+PROJECT_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../../.." >/dev/null 2>&1 && pwd)"
+# shellcheck disable=SC1091
+source "$PROJECT_ROOT/scripts/data/lib/s3_picker_helpers.sh"
+
 CONFIG_FILE="config/automation.conf"
 S3_BUCKET_DEFAULT="s3://rachel-upload-test"
 if [ -f "$CONFIG_FILE" ]; then
@@ -61,11 +65,11 @@ if [ $? -ne 0 ] || [ -z "$year" ]; then
     exec ./scripts/data/upload/main.sh
 fi
 
-echo ""
-aws s3 ls "$s3_bucket/" || true
-read -rp "Enter the name of the S3 subfolder: " selected_bucket
-selected_bucket="${selected_bucket#/}"
-selected_bucket="${selected_bucket%/}"
+selected_bucket="$(pick_s3_subfolder_select "$s3_bucket")" || {
+  echo -e "${RED}Could not select an S3 subfolder.${NC}"
+  sleep 2
+  exec ./scripts/data/upload/main.sh
+}
 
 processed_filename="${location}_${month}_${year}_modulegaze_logs.csv"
 processed_path="$folder/$processed_filename"

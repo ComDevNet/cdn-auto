@@ -1,5 +1,9 @@
 #!/bin/bash
 
+PROJECT_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../../.." >/dev/null 2>&1 && pwd)"
+# shellcheck disable=SC1091
+source "$PROJECT_ROOT/scripts/data/lib/s3_picker_helpers.sh"
+
 s3_bucket="s3://rachel-upload-test"
 
 # Terminal colors
@@ -63,10 +67,12 @@ if [ $? -ne 0 ] || [ -z "$year" ]; then
     exec ./scripts/data/upload/main.sh
 fi
 
-# Prompt for bucket subfolder
-echo ""
-aws s3 ls "$s3_bucket/"
-read -rp "Enter the name of the S3 subfolder: " selected_bucket
+# Select bucket subfolder from discovered S3 prefixes
+selected_bucket="$(pick_s3_subfolder_select "$s3_bucket")" || {
+  echo -e "${RED}Could not select an S3 subfolder.${NC}"
+  sleep 2
+  exec ./scripts/data/upload/main.sh
+}
 
 # Construct processed filename
 processed_filename="${location}_${month}_${year}_access_logs.csv"

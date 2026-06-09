@@ -133,6 +133,9 @@ discover_child_prefixes(){
   fi
 }
 
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/../lib/s3_picker_helpers.sh"
+
 check_network(){
   getent hosts s3.amazonaws.com >/dev/null 2>&1 || return 1
   have curl && timeout 5s curl -Is https://s3.amazonaws.com >/dev/null 2>&1 || true
@@ -150,7 +153,7 @@ ensure_preflight_ok(){
   local msg=""
   (( net_ok==0 )) && msg+="• Network to s3.amazonaws.com unreachable.\n"
   (( id_ok==0 )) && msg+="• AWS identity not confirmed for '$SERVICE_USER'.\n"
-  msg+="\nContinue anyway? (You can enter bucket/subfolder manually.)"
+  msg+="\nContinue anyway? (S3 bucket/prefix choices come from AWS discovery.)"
   if have_whiptail; then whiptail --title "Preflight checks" --yes-button "Continue" --no-button "Exit" --yesno "$msg" 14 74 || exit 2
   else echo -e "$msg"; read -rp "Continue? [Y/n]: " yn; [[ "${yn,,}" == "n" ]] && exit 2
   fi
@@ -218,22 +221,30 @@ else
   MODULEGAZE_ENABLED="0"
 fi
 
+pick_oc4d_bucket() {
+  pick_s3_bucket_into OC4D_BUCKET "${OC4D_BUCKET}" "" || exit 2
+}
+
+pick_oc4d_parent_org() {
+  local bucket_name
+  bucket_name="$(s3_picker_bucket_name "$OC4D_BUCKET")"
+  pick_s3_prefix_into OC4D_PARENT_ORG "s3://${bucket_name}" "" 0 "${OC4D_PARENT_ORG}" \
+    "Select OC4D parent org in s3://${bucket_name}/" 0 || exit 2
+}
+
 if [[ "$SERVER_VERSION" == "v2" || "$SERVER_VERSION" == "v6" ]]; then
   if confirm "Also pull OC4D assessment results from the local OC4D API and upload to the OC4D reports bucket?"; then
     OC4D_ASSESSMENTS_ENABLED="1"
     OC4D_API_BASE_URL="http://127.0.0.1:3000"
     OC4D_API_TOKEN=""
-    say "OC4D API: ${OC4D_API_BASE_URL} (local; token auto-fetched at runtime)"
-    prompt_text "OC4D S3 bucket (name or s3://...)" "${OC4D_BUCKET}" OC4D_BUCKET
-    prompt_text "OC4D parent org (S3 key prefix)" "${OC4D_PARENT_ORG}" OC4D_PARENT_ORG
-    prompt_text "Student map CSV" "${OC4D_STUDENT_MAP_FILE}" OC4D_STUDENT_MAP_FILE
-    prompt_text "Assessment map CSV" "${OC4D_ASSESSMENT_MAP_FILE}" OC4D_ASSESSMENT_MAP_FILE
-    if confirm "Also scan a local folder for pre-exported assessment CSV files?"; then
-      prompt_text "OC4D source directory (optional)" "${OC4D_SOURCE_DIR}" OC4D_SOURCE_DIR
-    else
-      OC4D_SOURCE_DIR=""
-    fi
+    OC4D_STUDENT_MAP_FILE="${OC4D_STUDENT_MAP_FILE:-$PROJECT_ROOT/config/oc4d/student-map.csv}"
+    OC4D_ASSESSMENT_MAP_FILE="${OC4D_ASSESSMENT_MAP_FILE:-$PROJECT_ROOT/config/oc4d/assessment-map.csv}"
+    OC4D_SOURCE_DIR=""
     OC4D_UPLOAD_MODE="direct_s3"
+    say "OC4D API: ${OC4D_API_BASE_URL} (local; token auto-fetched at runtime)"
+    say "OC4D maps: ${OC4D_STUDENT_MAP_FILE} and ${OC4D_ASSESSMENT_MAP_FILE}"
+    pick_oc4d_bucket
+    pick_oc4d_parent_org
   else
     OC4D_ASSESSMENTS_ENABLED="0"
   fi
@@ -246,87 +257,26 @@ while :; do
   validate_device_location "$DEVICE_LOCATION" && break || say "Invalid location. Use 2-64 chars: [A-Za-z0-9_-]"
 done
 
-pick_bucket(){
-  local out rc err="" opts=()
-  out="$(aws_capture s3 ls 2>&1)"; rc=$?
-  if (( rc != 0 )); then err="$out"; out=""; fi
-  if [[ -z "$out" ]]; then
-    local msg="Could not discover S3 buckets for user '$SERVICE_USER'.\n\nError:\n${err:-<no details>}\n\nSelect **Exit** to stop now, or **Manual** to type a bucket URL."
-    if have_whiptail; then whiptail --title "Bucket discovery failed" --yes-button "Exit" --no-button "Manual" --yesno "$msg" 18 74 && exit 2
-    else echo -e "$msg"; read -rp "Exit? [Y/n]: " yn; [[ "${yn,,}" != "n" ]] && exit 2
-    fi
-    while :; do
-      prompt_text "S3 bucket (e.g., s3://my-bucket)" "${S3_BUCKET}" S3_BUCKET
-      S3_BUCKET="${S3_BUCKET%/}"
-      [[ "$S3_BUCKET" =~ ^s3:// ]] && break || say "Bucket must start with s3://"
-    done
-    return 0
-  fi
-  while IFS= read -r line; do
-    b="$(echo "$line" | awk '{print $3}')"; [[ -n "$b" ]] && opts+=( "$b" "$b" )
-  done <<< "$out"
-  opts+=( "CUSTOM" "Enter bucket manually" )
-  choice="$(menu_select_cancelable "Select S3 bucket (discovered via AWS CLI)" 20 74 12 "${opts[@]}")"
-  [[ "$choice" == "__EXIT__" ]] && exit 2
-  if [[ "$choice" == "CUSTOM" ]]; then
-    while :; do
-      prompt_text "S3 bucket (e.g., s3://my-bucket)" "${S3_BUCKET}" S3_BUCKET
-      S3_BUCKET="${S3_BUCKET%/}"
-      [[ "$S3_BUCKET" =~ ^s3:// ]] && break || say "Bucket must start with s3://"
-    done
-  else
-    S3_BUCKET="s3://$choice"
-  fi
+pick_bucket() {
+  pick_s3_bucket_into S3_BUCKET "${S3_BUCKET}" "s3://" || exit 2
 }
 pick_bucket
 
-pick_subfolder(){
-  local bucket_name="${S3_BUCKET#s3://}"; bucket_name="${bucket_name%%/*}"
-  local opts=( "NONE" "<bucket root>" "CUSTOM" "Enter subfolder manually" )
-  local prefixes=()
-  local p
-  while IFS= read -r p; do
-    [[ -n "$p" ]] && prefixes+=( "$p" )
-  done < <(discover_child_prefixes "$bucket_name" "" 0)
-  if [[ -n "$S3_SUBFOLDER" ]]; then
-    prefixes+=( "$(sanitize_subfolder "$S3_SUBFOLDER")" )
-  fi
-  while IFS= read -r p; do
-    [[ -n "$p" ]] && opts+=( "$p" "$p" )
-  done < <(printf '%s\n' "${prefixes[@]}" | sed '/^$/d' | LC_ALL=C sort -u)
-  choice="$(menu_select_cancelable "Select S3 subfolder in s3://$bucket_name/" 20 74 12 "${opts[@]}")"
-  [[ "$choice" == "__EXIT__" ]] && exit 2
-  case "$choice" in
-    NONE) S3_SUBFOLDER="" ;;
-    CUSTOM) prompt_text "Subfolder (no leading slash; empty for root)" "${S3_SUBFOLDER}" S3_SUBFOLDER; S3_SUBFOLDER="$(sanitize_subfolder "$S3_SUBFOLDER")" ;;
-    *) S3_SUBFOLDER="$choice" ;;
-  esac
+pick_subfolder() {
+  local bucket_name
+  bucket_name="$(s3_picker_bucket_name "$S3_BUCKET")"
+  pick_s3_prefix_into S3_SUBFOLDER "$S3_BUCKET" "" 1 "${S3_SUBFOLDER}" \
+    "Select S3 subfolder in s3://${bucket_name}/" 0 || exit 2
 }
 pick_subfolder
 S3_SUBFOLDER="$(sanitize_subfolder "$S3_SUBFOLDER")"
 
-pick_rachel_subfolder(){
-  local bucket_name="${S3_BUCKET#s3://}"; bucket_name="${bucket_name%%/*}"
-  local rachel_base="${S3_SUBFOLDER:+${S3_SUBFOLDER}/}RACHEL/"
-  local opts=( "NONE" "<RACHEL root>" "CUSTOM" "Enter RACHEL subfolder manually" )
-  local prefixes=()
-  local p
-  while IFS= read -r p; do
-    [[ -n "$p" ]] && prefixes+=( "$p" )
-  done < <(discover_child_prefixes "$bucket_name" "$rachel_base" 1)
-  if [[ -n "$RACHEL_SUBFOLDER" ]]; then
-    prefixes+=( "$(sanitize_subfolder "$RACHEL_SUBFOLDER")" )
-  fi
-  while IFS= read -r p; do
-    [[ -n "$p" ]] && opts+=( "$p" "$p" )
-  done < <(printf '%s\n' "${prefixes[@]}" | sed '/^$/d' | LC_ALL=C sort -u)
-  choice="$(menu_select_cancelable "Select RACHEL subfolder in s3://$bucket_name/$rachel_base" 20 74 12 "${opts[@]}")"
-  [[ "$choice" == "__EXIT__" ]] && exit 2
-  case "$choice" in
-    NONE) RACHEL_SUBFOLDER="" ;;
-    CUSTOM) prompt_text "RACHEL subfolder (no leading slash; empty for RACHEL root)" "${RACHEL_SUBFOLDER}" RACHEL_SUBFOLDER; RACHEL_SUBFOLDER="$(sanitize_subfolder "$RACHEL_SUBFOLDER")" ;;
-    *) RACHEL_SUBFOLDER="$choice" ;;
-  esac
+pick_rachel_subfolder() {
+  local bucket_name rachel_base
+  bucket_name="$(s3_picker_bucket_name "$S3_BUCKET")"
+  rachel_base="${S3_SUBFOLDER:+${S3_SUBFOLDER}/}RACHEL"
+  pick_s3_prefix_into RACHEL_SUBFOLDER "$S3_BUCKET" "$rachel_base" 1 "${RACHEL_SUBFOLDER}" \
+    "Select RACHEL subfolder in s3://${bucket_name}/${rachel_base}/" 1 || exit 2
 }
 pick_rachel_subfolder
 RACHEL_SUBFOLDER="$(sanitize_subfolder "$RACHEL_SUBFOLDER")"
