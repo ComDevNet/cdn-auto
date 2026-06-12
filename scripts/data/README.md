@@ -28,7 +28,7 @@ Data contracts
 - OC4D assessment exports: header + data-row CSV files uploaded to `{parentOrg}/Assessments/{studentId}/{assessmentId}/{base}__{isoTs}.csv`
 - OC4D mapping files:
   - `config/oc4d/student-map.csv` with `source_student_name,studentId,parentOrg`
-  - `config/oc4d/assessment-map.csv` with `source_assessment_name,assessmentId,parentOrg`
+  - `config/oc4d/assessment-map.csv` with `source_assessment_name,assessmentId,parentOrg` for optional assessment ID overrides; unmapped assessments are uploaded automatically using a generated slug
 - Output CSV (summary.csv) columns (vary by processor) include at least:
   - IP Address, Access Date, Module Viewed, Status Code, Data Saved (GB), Device Used, Browser Used
   - Some processors (for example `castle.py`) also include Access Time and Location Viewed

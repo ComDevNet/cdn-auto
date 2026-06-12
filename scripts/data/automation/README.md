@@ -55,7 +55,7 @@ Written by `configure.sh` and kept inside the repo so the automation can run fro
 - `OC4D_UPLOAD_MODE`: `direct_s3` (default) or reserved `presigned_api`
 - `OC4D_SOURCE_DIR`: optional folder of pre-exported assessment CSV files
 - `OC4D_STUDENT_MAP_FILE`: CSV mapping local student identity to cloud `studentId`
-- `OC4D_ASSESSMENT_MAP_FILE`: CSV mapping local assessment identity to cloud `assessmentId`
+- `OC4D_ASSESSMENT_MAP_FILE`: optional CSV overrides for local assessment identity to cloud `assessmentId`; unmapped assessments are uploaded automatically using a generated slug from the assessment title
 - `OC4D_STATE_FILE`: JSON state file tracking already-uploaded result IDs
 - `SCHEDULE_TYPE`: `hourly` (Castle only), `daily`, `weekly`, `monthly`, `yearly`, or `custom`
 - `RUN_INTERVAL`: for custom schedules (seconds, `>= 300`)
@@ -87,7 +87,7 @@ Data flow
 4. Pull and upload OC4D assessments
 
 - When enabled on Server v5/v6, fetches `GET /api/assessment-results?scope=all` from the configured OC4D API
-- Resolves cloud `studentId` and `assessmentId` via `config/oc4d/student-map.csv` and `config/oc4d/assessment-map.csv`
+- Resolves cloud `studentId` via `config/oc4d/student-map.csv`; resolves `assessmentId` via `config/oc4d/assessment-map.csv` when present, otherwise generates a stable slug from the assessment title
 - Builds validated CSV artifacts with header row plus one data row per result
 - Uploads to `OC4D_BUCKET` using strict keys: `{parentOrg}/Assessments/{studentId}/{assessmentId}/{base}__{isoTs}.csv`
 - If offline or upload fails, files are queued in `00_DATA/00_UPLOAD_QUEUE/OC4DAssessments/` with `.oc4dkey` sidecars
@@ -127,5 +127,5 @@ Troubleshooting
 - If ModuleGaze CSVs still show raw IDs, confirm `curl -s http://127.0.0.1:3002/api/modules` returns module rows or add mappings to `config/oc4d/module-map.csv`
 - If Kolibri export fails on `0.19.2`, confirm the command still receives both `--start_date` and `--end_date`
 - If `KOLIBRI_FACILITY_ID` is not set, the scripts use Kolibri's default facility automatically
-- If OC4D assessment uploads fail validation, check mapping files under `config/oc4d/` and confirm the API token has super-admin scope for `scope=all`
+- If OC4D assessment uploads fail validation, check the student mapping file and confirm the API token has super-admin scope for `scope=all`; assessment mappings are optional overrides
 - OC4D queued uploads require both the CSV and its `.oc4dkey` sidecar in `OC4DAssessments/`

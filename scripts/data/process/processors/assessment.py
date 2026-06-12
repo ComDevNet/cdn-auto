@@ -150,7 +150,7 @@ def resolve_assessment_mapping(
     *,
     assessment_id: str = "",
     assessment_title: str = "",
-) -> tuple[str, str]:
+) -> tuple[str, str, bool]:
     candidates = [
         assessment_id.strip().lower(),
         assessment_id.strip(),
@@ -161,11 +161,11 @@ def resolve_assessment_mapping(
         if candidate and candidate in assessment_index:
             row = assessment_index[candidate]
             parent_org = row.get("parentOrg") or default_parent_org
-            return row["assessmentId"], parent_org
-    raise KeyError(
-        "missing assessmentId mapping for "
-        f"assessmentId={assessment_id!r} title={assessment_title!r}"
-    )
+            return row["assessmentId"], parent_org, False
+
+    fallback = safe_base_name(assessment_id, "assessment")
+    generated_id = safe_base_name(assessment_title, fallback)
+    return generated_id, default_parent_org, True
 
 
 def parse_created_at(value: Any) -> str:
@@ -419,7 +419,11 @@ def process_api_results(
                 user_email=user_email,
                 user_username=user_username,
             )
-            cloud_assessment_id, assessment_parent = resolve_assessment_mapping(
+            (
+                cloud_assessment_id,
+                assessment_parent,
+                auto_assessment_mapping,
+            ) = resolve_assessment_mapping(
                 assessment_index,
                 default_parent_org,
                 assessment_id=assessment_id_local,
@@ -463,6 +467,7 @@ def process_api_results(
                     "csv": str(csv_path),
                     "s3_key": s3_key,
                     "unassigned": is_unassigned,
+                    "auto_assessment_mapping": auto_assessment_mapping,
                 }
             )
             if is_unassigned:
@@ -532,7 +537,11 @@ def process_source_dir(
                 user_email=source_student,
                 user_username=source_student,
             )
-            cloud_assessment_id, assessment_parent = resolve_assessment_mapping(
+            (
+                cloud_assessment_id,
+                assessment_parent,
+                auto_assessment_mapping,
+            ) = resolve_assessment_mapping(
                 assessment_index,
                 default_parent_org,
                 assessment_id=source_assessment,
@@ -557,6 +566,7 @@ def process_source_dir(
                     "result_id": source_csv.name,
                     "csv": str(dest_csv),
                     "s3_key": s3_key,
+                    "auto_assessment_mapping": auto_assessment_mapping,
                 }
             )
             counts["uploaded"] += 1
@@ -681,7 +691,7 @@ def process_marking_schemes(
             continue
         assessment_title = title_by_pi_id.get(pi_assessment_id, pi_assessment_id)
         try:
-            cloud_assessment_id, parent_org = resolve_assessment_mapping(
+            cloud_assessment_id, parent_org, auto_assessment_mapping = resolve_assessment_mapping(
                 assessment_index,
                 default_parent_org,
                 assessment_id=pi_assessment_id,
@@ -714,6 +724,7 @@ def process_marking_schemes(
                     "assessment_name": assessment_title,
                     "subject_name": subject_name,
                     "module_name": module_name,
+                    "auto_assessment_mapping": auto_assessment_mapping,
                     "csv": str(csv_path),
                     "s3_key": s3_key,
                     "subject_json": str(subject_json_path),
