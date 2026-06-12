@@ -18,4 +18,6 @@ Implementation notes
 - Outputs: per-file CSVs and a run-level summary.csv (headers vary per processor; see parent README)
 - Error handling: castle.py writes JSON/regex/timestamp issues to error_log.txt; logv2.py, dhub.py, and log-v6.py print skipped lines
 - Module extraction: dhub.py and log-v6.py handle `/uploads/modules/[id]/[module-name]`, `/modules/[id]/[module-name]`, and `/uploads/other-modules/[module-name]` path formats
+- ModuleGaze names: modulegaze.py resolves `moduleId` through `MODULEGAZE_API_BASE_URL/api/modules` (default `http://127.0.0.1:3002`) and optional `MODULEGAZE_MODULE_MAP_FILE` CSV fallback
+- OC4D assessments: assessment.py uses `config/oc4d/assessment-map.csv` as optional overrides; when a new assessment is not mapped, it generates a safe assessment ID from the title and continues. If question metadata is missing but result answers exist, it writes generic answer columns instead of failing the result.
 - Performance: processors stream line-by-line; summary.csv is combined from per-file CSVs to keep memory steady

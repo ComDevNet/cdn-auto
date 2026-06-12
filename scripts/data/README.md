@@ -17,6 +17,8 @@ End-to-end flow
 3. Finalize + Upload: either manual ([upload](./upload/)) or scheduled ([automation/runner.sh](./automation/runner.sh))
 4. Kolibri Summary: exports the Kolibri summary CSV with `kolibri manage exportlogs` and uploads it to the configured `Kolibri/` S3 prefix
 5. OC4D Assessments: pulls assessment results from the local OC4D API, maps student/assessment IDs, and uploads contract CSVs to `OC4D_BUCKET`
+   - New/unmapped assessments are uploaded automatically with generated assessment IDs; the assessment map is only an override file.
+   - Result rows are still exported if question metadata is missing, using generic answer columns.
 
 Data contracts
 
@@ -28,7 +30,7 @@ Data contracts
 - OC4D assessment exports: header + data-row CSV files uploaded to `{parentOrg}/Assessments/{studentId}/{assessmentId}/{base}__{isoTs}.csv`
 - OC4D mapping files:
   - `config/oc4d/student-map.csv` with `source_student_name,studentId,parentOrg`
-  - `config/oc4d/assessment-map.csv` with `source_assessment_name,assessmentId,parentOrg`
+  - `config/oc4d/assessment-map.csv` with `source_assessment_name,assessmentId,parentOrg` for optional assessment ID overrides; unmapped assessments are uploaded automatically using a generated slug
 - Output CSV (summary.csv) columns (vary by processor) include at least:
   - IP Address, Access Date, Module Viewed, Status Code, Data Saved (GB), Device Used, Browser Used
   - Some processors (for example `castle.py`) also include Access Time and Location Viewed

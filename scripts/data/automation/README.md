@@ -10,8 +10,9 @@ Key features
 
 - Scheduled runs via systemd timer (daily, weekly, monthly, custom, and hourly for Castle logs)
 - Offline-first uploads with queue flushing on the next successful run
+- Stage-isolated execution so RACHEL, ModuleGaze, OC4D assessments, and Kolibri each get a chance to upload even if another stage has no logs or hits a processing error
 - Shared S3 destination logic for `RACHEL/`, `Kolibri/`, `ModuleGaze/`, and OC4D assessment contract keys
-- ModuleGaze session log export from active `.log` files and daily `.log.zip` archives
+- ModuleGaze session log export from active `.log` files and daily `.log.zip` archives, with module IDs resolved to display names
 - Kolibri summary exports using the supported `kolibri manage exportlogs -l summary` CLI
 - Built-in workaround for Kolibri `0.19.2`, which crashes if `start_date` and `end_date` are omitted
 - Guided configuration with AWS bucket discovery and a live test upload
@@ -44,6 +45,8 @@ Written by `configure.sh` and kept inside the repo so the automation can run fro
 - `RACHEL_SUBFOLDER`: optional subfolder under `.../RACHEL/` (for per-student server feeds)
 - `KOLIBRI_FACILITY_ID`: optional override; if omitted, Kolibri's default facility is used
 - `MODULEGAZE_ENABLED`: `1` to also process `/var/log/modulegaze`, `0` to skip it
+- `MODULEGAZE_API_BASE_URL`: local ModuleGaze URL used to resolve module IDs to display names (default `http://127.0.0.1:3002`)
+- `MODULEGAZE_MODULE_MAP_FILE`: optional CSV fallback for module ID to display-name mapping
 - `OC4D_ASSESSMENTS_ENABLED`: `1` to pull assessment results from the local OC4D API and upload to the OC4D reports bucket
 - `OC4D_API_BASE_URL`: local `oc4d-server` URL (default `http://127.0.0.1:3000`; not prompted during configure)
 - `OC4D_API_TOKEN`: optional override; when empty, the runner auto-authenticates against the local API using the seeded super-admin account
@@ -53,7 +56,7 @@ Written by `configure.sh` and kept inside the repo so the automation can run fro
 - `OC4D_UPLOAD_MODE`: `direct_s3` (default) or reserved `presigned_api`
 - `OC4D_SOURCE_DIR`: optional folder of pre-exported assessment CSV files
 - `OC4D_STUDENT_MAP_FILE`: CSV mapping local student identity to cloud `studentId`
-- `OC4D_ASSESSMENT_MAP_FILE`: CSV mapping local assessment identity to cloud `assessmentId`
+- `OC4D_ASSESSMENT_MAP_FILE`: optional CSV overrides for local assessment identity to cloud `assessmentId`; unmapped assessments are uploaded automatically using a generated slug from the assessment title
 - `OC4D_STATE_FILE`: JSON state file tracking already-uploaded result IDs
 - `SCHEDULE_TYPE`: `hourly` (Castle only), `daily`, `weekly`, `monthly`, `yearly`, or `custom`
 - `RUN_INTERVAL`: for custom schedules (seconds, `>= 300`)
@@ -78,15 +81,15 @@ Data flow
 3. Process and upload `ModuleGaze/`
 
 - When enabled and `/var/log/modulegaze` exists, copies `modulegaze-sessions.log` and `modulegaze-sessions-*.log.zip` into `00_DATA/LOCATION_modulegaze_logs_YYYY_MM_DD`
-- Processes session-duration rows into one `summary.csv`
+- Processes session-duration rows into one `summary.csv`; `moduleId` values are resolved through `MODULEGAZE_API_BASE_URL/api/modules`, then `MODULEGAZE_MODULE_MAP_FILE` if present
 - Filters the summary using the same schedule window
 - Uploads to `S3_BUCKET/S3_SUBFOLDER/ModuleGaze/`, or queues in `00_DATA/00_UPLOAD_QUEUE/ModuleGaze/`
 
 4. Pull and upload OC4D assessments
 
 - When enabled on Server v5/v6, fetches `GET /api/assessment-results?scope=all` from the configured OC4D API
-- Resolves cloud `studentId` and `assessmentId` via `config/oc4d/student-map.csv` and `config/oc4d/assessment-map.csv`
-- Builds validated CSV artifacts with header row plus one data row per result
+- Resolves cloud `studentId` via `config/oc4d/student-map.csv`; resolves `assessmentId` via `config/oc4d/assessment-map.csv` when present, otherwise generates a stable slug from the assessment title
+- Builds validated CSV artifacts with header row plus one data row per result; if question metadata is missing, result answers are still exported under generic answer columns
 - Uploads to `OC4D_BUCKET` using strict keys: `{parentOrg}/Assessments/{studentId}/{assessmentId}/{base}__{isoTs}.csv`
 - If offline or upload fails, files are queued in `00_DATA/00_UPLOAD_QUEUE/OC4DAssessments/` with `.oc4dkey` sidecars
 
@@ -122,7 +125,8 @@ Troubleshooting
 
 - Use `./scripts/data/automation/status.sh` to see timer state, queue contents, connectivity, AWS identity, and recent logs
 - If uploads fail, the automation keeps the CSV in the matching queue folder for the next run
+- If ModuleGaze CSVs still show raw IDs, confirm `curl -s http://127.0.0.1:3002/api/modules` returns module rows or add mappings to `config/oc4d/module-map.csv`
 - If Kolibri export fails on `0.19.2`, confirm the command still receives both `--start_date` and `--end_date`
 - If `KOLIBRI_FACILITY_ID` is not set, the scripts use Kolibri's default facility automatically
-- If OC4D assessment uploads fail validation, check mapping files under `config/oc4d/` and confirm the API token has super-admin scope for `scope=all`
+- If OC4D assessment uploads fail validation, check the student mapping file and confirm the API token has super-admin scope for `scope=all`; assessment mappings are optional overrides
 - OC4D queued uploads require both the CSV and its `.oc4dkey` sidecar in `OC4DAssessments/`

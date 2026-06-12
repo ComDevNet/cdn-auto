@@ -80,6 +80,8 @@ if content="$(read_config)"; then
   AWS_PROFILE=$(echo "$content" | awk -F= '/^AWS_PROFILE=/{print $2}' | sed 's/^"//; s/"$//')
   AWS_REGION=$(echo "$content" | awk -F= '/^AWS_REGION=/{print $2}' | sed 's/^"//; s/"$//')
   MODULEGAZE_ENABLED=$(echo "$content" | awk -F= '/^MODULEGAZE_ENABLED=/{print $2}' | sed 's/^"//; s/"$//')
+  MODULEGAZE_API_BASE_URL=$(echo "$content" | awk -F= '/^MODULEGAZE_API_BASE_URL=/{print $2}' | sed 's/^"//; s/"$//')
+  MODULEGAZE_MODULE_MAP_FILE=$(echo "$content" | awk -F= '/^MODULEGAZE_MODULE_MAP_FILE=/{print $2}' | sed 's/^"//; s/"$//')
   OC4D_ASSESSMENTS_ENABLED=$(echo "$content" | awk -F= '/^OC4D_ASSESSMENTS_ENABLED=/{print $2}' | sed 's/^"//; s/"$//')
   OC4D_API_BASE_URL=$(echo "$content" | awk -F= '/^OC4D_API_BASE_URL=/{print $2}' | sed 's/^"//; s/"$//')
   OC4D_BUCKET=$(echo "$content" | awk -F= '/^OC4D_BUCKET=/{print $2}' | sed 's/^"//; s/"$//')
@@ -90,6 +92,8 @@ if content="$(read_config)"; then
   echo "  S3_BUCKET      = ${S3_BUCKET:-<unset>}"
   echo "  S3_SUBFOLDER   = ${S3_SUBFOLDER:-<unset>}"
   echo "  MODULEGAZE     = ${MODULEGAZE_ENABLED:-1}"
+  echo "  MODULEGAZE API = ${MODULEGAZE_API_BASE_URL:-http://127.0.0.1:3002}"
+  echo "  MODULEGAZE map = ${MODULEGAZE_MODULE_MAP_FILE:-$PROJECT_ROOT/config/oc4d/module-map.csv}"
   echo "  OC4D assess.   = ${OC4D_ASSESSMENTS_ENABLED:-0}"
   echo "  OC4D API       = ${OC4D_API_BASE_URL:-<unset>}"
   echo "  OC4D bucket    = ${OC4D_BUCKET:-oc4d-raw-reports}"

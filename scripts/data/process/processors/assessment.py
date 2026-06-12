@@ -150,7 +150,7 @@ def resolve_assessment_mapping(
     *,
     assessment_id: str = "",
     assessment_title: str = "",
-) -> tuple[str, str]:
+) -> tuple[str, str, bool]:
     candidates = [
         assessment_id.strip().lower(),
         assessment_id.strip(),
@@ -161,11 +161,11 @@ def resolve_assessment_mapping(
         if candidate and candidate in assessment_index:
             row = assessment_index[candidate]
             parent_org = row.get("parentOrg") or default_parent_org
-            return row["assessmentId"], parent_org
-    raise KeyError(
-        "missing assessmentId mapping for "
-        f"assessmentId={assessment_id!r} title={assessment_title!r}"
-    )
+            return row["assessmentId"], parent_org, False
+
+    fallback = safe_base_name(assessment_id, "assessment")
+    generated_id = safe_base_name(assessment_title, fallback)
+    return generated_id, default_parent_org, True
 
 
 def parse_created_at(value: Any) -> str:
@@ -187,11 +187,29 @@ def parse_created_at(value: Any) -> str:
         return text
 
 
+def answer_to_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (str, int, float, bool)):
+        return str(value)
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def option_text_for_index(question: dict[str, Any], selected_index: int | None) -> str:
+    options = question.get("options") or []
+    if selected_index is None or not isinstance(options, list):
+        return ""
+    if selected_index < 0 or selected_index >= len(options):
+        return ""
+    return str(options[selected_index])
+
+
 def selected_answer_for(answers: Any, question: dict[str, Any], question_index: int) -> str:
     selected_index: int | None = None
+    raw_answer: Any = None
     if isinstance(answers, list):
-        value = answers[question_index] if question_index < len(answers) else None
-        selected_index = value if isinstance(value, int) else None
+        raw_answer = answers[question_index] if question_index < len(answers) else None
+        selected_index = raw_answer if isinstance(raw_answer, int) else None
     elif isinstance(answers, dict):
         review = answers.get("review")
         if isinstance(review, list) and question_index < len(review):
@@ -199,21 +217,78 @@ def selected_answer_for(answers: Any, question: dict[str, Any], question_index: 
             if isinstance(item, dict):
                 raw = item.get("selectedIndex")
                 selected_index = raw if isinstance(raw, int) else None
+                raw_answer = (
+                    item.get("selectedAnswer")
+                    or item.get("answer")
+                    or item.get("value")
+                    or raw
+                )
+            else:
+                raw_answer = item
         if selected_index is None:
             selections = answers.get("selections")
             if isinstance(selections, dict):
                 raw = selections.get(question.get("id")) or selections.get(str(question_index))
                 selected_index = raw if isinstance(raw, int) else None
+                raw_answer = raw
             else:
                 raw = answers.get(question.get("id")) or answers.get(str(question_index))
                 selected_index = raw if isinstance(raw, int) else None
+                raw_answer = raw
 
-    options = question.get("options") or []
-    if selected_index is None or not isinstance(options, list):
-        return ""
-    if selected_index < 0 or selected_index >= len(options):
-        return ""
-    return str(options[selected_index])
+    option_text = option_text_for_index(question, selected_index)
+    return option_text or answer_to_text(raw_answer)
+
+
+def unique_headers(headers: list[str]) -> list[str]:
+    seen: dict[str, int] = {}
+    unique: list[str] = []
+    for idx, header in enumerate(headers, start=1):
+        base = header.strip() or f"Column {idx}"
+        key = base.strip().lower()
+        count = seen.get(key, 0) + 1
+        seen[key] = count
+        unique.append(base if count == 1 else f"{base} {count}")
+    return unique
+
+
+def fallback_answer_columns(answers: Any) -> tuple[list[str], list[str]]:
+    if isinstance(answers, list):
+        if not answers:
+            return ["Raw Answers"], [""]
+        return [f"Answer {idx + 1}" for idx in range(len(answers))], [
+            answer_to_text(value) for value in answers
+        ]
+
+    if isinstance(answers, dict):
+        review = answers.get("review")
+        if isinstance(review, list) and review:
+            values = []
+            for item in review:
+                if isinstance(item, dict):
+                    values.append(
+                        answer_to_text(
+                            item.get("selectedAnswer")
+                            or item.get("answer")
+                            or item.get("value")
+                            or item.get("selectedIndex")
+                        )
+                    )
+                else:
+                    values.append(answer_to_text(item))
+            return [f"Answer {idx + 1}" for idx in range(len(values))], values
+
+        selections = answers.get("selections")
+        if isinstance(selections, dict) and selections:
+            items = sorted(selections.items(), key=lambda item: str(item[0]))
+            return [f"Answer {key}" for key, _ in items], [
+                answer_to_text(value) for _, value in items
+            ]
+
+        if answers:
+            return ["Raw Answers"], [answer_to_text(answers)]
+
+    return ["Raw Answers"], [answer_to_text(answers)]
 
 
 def validate_csv_file(path: Path) -> None:
@@ -241,13 +316,11 @@ def write_result_csv(
     source_identity: dict[str, str] | None = None,
 ) -> None:
     headers = ["Timestamp"]
+    row = [timestamp]
     if source_identity:
         headers.extend(
             ["Source Email", "Source Username", "Source Name", "Source User Id"]
         )
-    headers.extend((q.get("prompt") or f"Question {idx + 1}").strip() for idx, q in enumerate(questions))
-    row = [timestamp]
-    if source_identity:
         row.extend(
             [
                 source_identity.get("email", ""),
@@ -256,8 +329,22 @@ def write_result_csv(
                 source_identity.get("user_id", ""),
             ]
         )
-    for idx, question in enumerate(questions):
-        row.append(selected_answer_for(answers, question, idx))
+
+    if questions:
+        answer_headers = [
+            (q.get("prompt") or f"Question {idx + 1}").strip()
+            for idx, q in enumerate(questions)
+        ]
+        answer_values = [
+            selected_answer_for(answers, question, idx)
+            for idx, question in enumerate(questions)
+        ]
+    else:
+        answer_headers, answer_values = fallback_answer_columns(answers)
+
+    headers.extend(answer_headers)
+    row.extend(answer_values)
+    headers = unique_headers(headers)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
@@ -329,14 +416,33 @@ def resolve_api_token(api_base: str, token: str) -> str:
 def fetch_api_payload(api_base: str, token: str, take: int) -> dict[str, Any]:
     api_base = api_base.rstrip("/")
     url = f"{api_base}/api/assessment-results?scope=all&take={take}"
-    headers = {"Accept": "application/json", "Authorization": f"Bearer {resolve_api_token(api_base, token)}"}
-    request = urllib.request.Request(url, headers=headers)
-    try:
+
+    def fetch_with_access_token(access_token: str) -> str:
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {access_token}",
+        }
+        request = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(request, timeout=60) as response:
-            body = response.read().decode("utf-8")
+            return response.read().decode("utf-8")
+
+    access_token = resolve_api_token(api_base, token)
+    try:
+        body = fetch_with_access_token(access_token)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"API fetch failed ({exc.code}): {detail}") from exc
+        if token and exc.code in (401, 403):
+            try:
+                body = fetch_with_access_token(resolve_api_token(api_base, ""))
+            except urllib.error.HTTPError as retry_exc:
+                retry_detail = retry_exc.read().decode("utf-8", errors="replace")
+                raise RuntimeError(
+                    f"API fetch failed after token refresh ({retry_exc.code}): {retry_detail}"
+                ) from retry_exc
+            except urllib.error.URLError as retry_exc:
+                raise RuntimeError(f"API fetch failed after token refresh: {retry_exc}") from retry_exc
+        else:
+            raise RuntimeError(f"API fetch failed ({exc.code}): {detail}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"API fetch failed: {exc}") from exc
     payload = json.loads(body)
@@ -400,7 +506,11 @@ def process_api_results(
                 user_email=user_email,
                 user_username=user_username,
             )
-            cloud_assessment_id, assessment_parent = resolve_assessment_mapping(
+            (
+                cloud_assessment_id,
+                assessment_parent,
+                auto_assessment_mapping,
+            ) = resolve_assessment_mapping(
                 assessment_index,
                 default_parent_org,
                 assessment_id=assessment_id_local,
@@ -408,8 +518,8 @@ def process_api_results(
             )
             parent_org = assessment_parent or parent_org
             questions = questions_by_assessment.get(assessment_id_local) or []
-            if not questions:
-                raise ValueError(f"no questions for assessmentId={assessment_id_local}")
+            if not isinstance(questions, list):
+                questions = []
 
             base = safe_base_name(assessment_title or cloud_assessment_id)
             s3_key = build_object_key(
@@ -444,6 +554,9 @@ def process_api_results(
                     "csv": str(csv_path),
                     "s3_key": s3_key,
                     "unassigned": is_unassigned,
+                    "auto_assessment_mapping": auto_assessment_mapping,
+                    "question_count": len(questions),
+                    "used_answer_fallback": len(questions) == 0,
                 }
             )
             if is_unassigned:
@@ -513,7 +626,11 @@ def process_source_dir(
                 user_email=source_student,
                 user_username=source_student,
             )
-            cloud_assessment_id, assessment_parent = resolve_assessment_mapping(
+            (
+                cloud_assessment_id,
+                assessment_parent,
+                auto_assessment_mapping,
+            ) = resolve_assessment_mapping(
                 assessment_index,
                 default_parent_org,
                 assessment_id=source_assessment,
@@ -538,6 +655,7 @@ def process_source_dir(
                     "result_id": source_csv.name,
                     "csv": str(dest_csv),
                     "s3_key": s3_key,
+                    "auto_assessment_mapping": auto_assessment_mapping,
                 }
             )
             counts["uploaded"] += 1
@@ -634,7 +752,17 @@ def process_marking_schemes(
     questions_by_assessment = payload.get("questionsByAssessmentId") or {}
     results = payload.get("data") or []
     if not isinstance(questions_by_assessment, dict):
-        raise ValueError("API payload field 'questionsByAssessmentId' must be an object")
+        print(
+            json.dumps(
+                {
+                    "source": "marking-schemes",
+                    "counts": {"ready": 0, "failed": 0},
+                    "entries": [],
+                    "warning": "questionsByAssessmentId is missing or invalid; result CSVs will still be exported",
+                }
+            )
+        )
+        return []
 
     title_by_pi_id: dict[str, str] = {}
     subject_by_pi_id: dict[str, str] = {}
@@ -662,7 +790,7 @@ def process_marking_schemes(
             continue
         assessment_title = title_by_pi_id.get(pi_assessment_id, pi_assessment_id)
         try:
-            cloud_assessment_id, parent_org = resolve_assessment_mapping(
+            cloud_assessment_id, parent_org, auto_assessment_mapping = resolve_assessment_mapping(
                 assessment_index,
                 default_parent_org,
                 assessment_id=pi_assessment_id,
@@ -695,6 +823,7 @@ def process_marking_schemes(
                     "assessment_name": assessment_title,
                     "subject_name": subject_name,
                     "module_name": module_name,
+                    "auto_assessment_mapping": auto_assessment_mapping,
                     "csv": str(csv_path),
                     "s3_key": s3_key,
                     "subject_json": str(subject_json_path),
