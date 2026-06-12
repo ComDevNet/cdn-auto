@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 
 import csv
+import json
 import os
+import re
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
 from datetime import datetime
 
@@ -16,9 +21,140 @@ HEADER = [
     "Duration Seconds",
 ]
 
+DEFAULT_MODULEGAZE_API_BASE_URL = "http://127.0.0.1:3002"
+DEFAULT_MODULE_MAP_FILE = os.path.join("config", "oc4d", "module-map.csv")
+MODULE_ID_KEYS = ("moduleId", "moduleSlug", "module")
+MODULE_NAME_KEYS = ("moduleName", "moduleTitle", "moduleDisplayName", "name", "title")
+DYNAMIC_MODULE_SEGMENT = re.compile(r"^\d{10,}_[a-zA-Z0-9_-]+$")
+
+
+def normalize_lookup_key(value):
+    return value.strip().lower()
+
+
+def add_module_alias(module_index, alias, module_name):
+    alias = (alias or "").strip()
+    module_name = (module_name or "").strip()
+    if not alias or not module_name:
+        return
+    module_index[normalize_lookup_key(alias)] = module_name
+
+
+def stable_module_slug_from_url(value):
+    value = (value or "").strip()
+    if not value:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(value)
+        path = parsed.path if parsed.scheme else value.split("#", 1)[0].split("?", 1)[0]
+        path = urllib.parse.unquote(path)
+    except Exception:
+        path = value
+
+    path_lower = path.lower()
+    marker = "/uploads/modules/"
+    if marker in path_lower:
+        start = path_lower.index(marker) + len(marker)
+        parts = [part for part in path[start:].split("/") if part]
+        candidates = parts[:2]
+    else:
+        marker = "/modules/"
+        if marker not in path_lower:
+            return ""
+        start = path_lower.index(marker) + len(marker)
+        parts = [part for part in path[start:].split("/") if part]
+        candidates = parts[:2]
+
+    usable = []
+    for candidate in candidates:
+        if re.search(r"\.[a-z0-9]{1,10}$", candidate, re.IGNORECASE):
+            break
+        usable.append(candidate)
+    stable = [part for part in usable if not DYNAMIC_MODULE_SEGMENT.match(part)]
+    return stable[0] if stable else (usable[0] if usable else "")
+
+
+def load_module_map_file(path):
+    module_index = {}
+    if not path or not os.path.isfile(path):
+        return module_index
+
+    with open(path, "r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames:
+            return module_index
+        for row in reader:
+            source = (
+                row.get("source_module_id")
+                or row.get("moduleId")
+                or row.get("module_id")
+                or row.get("slug")
+                or ""
+            ).strip()
+            if not source or source.startswith("#"):
+                continue
+            module_name = (
+                row.get("moduleName")
+                or row.get("module_name")
+                or row.get("name")
+                or row.get("Module Viewed")
+                or ""
+            ).strip()
+            add_module_alias(module_index, source, module_name)
+    return module_index
+
+
+def fetch_module_catalog(api_base_url):
+    api_base_url = (api_base_url or "").strip().rstrip("/")
+    if not api_base_url or api_base_url.lower() in {"0", "false", "none", "off", "disabled"}:
+        return []
+    url = f"{api_base_url}/api/modules"
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+        print(f"ModuleGaze module catalog unavailable at {url}: {exc}")
+        return []
+
+    if isinstance(payload, dict):
+        modules = payload.get("modules") or []
+    elif isinstance(payload, list):
+        modules = payload
+    else:
+        modules = []
+    return modules if isinstance(modules, list) else []
+
+
+def build_module_name_index():
+    module_index = {}
+
+    api_base_url = os.environ.get(
+        "MODULEGAZE_API_BASE_URL",
+        DEFAULT_MODULEGAZE_API_BASE_URL,
+    )
+    for module in fetch_module_catalog(api_base_url):
+        if not isinstance(module, dict):
+            continue
+        module_name = str(module.get("name") or "").strip()
+        if not module_name:
+            continue
+        add_module_alias(module_index, str(module.get("id") or ""), module_name)
+        add_module_alias(module_index, module_name, module_name)
+        add_module_alias(module_index, str(module.get("indexHtmlUrl") or ""), module_name)
+        add_module_alias(
+            module_index,
+            stable_module_slug_from_url(str(module.get("indexHtmlUrl") or "")),
+            module_name,
+        )
+
+    map_file = os.environ.get("MODULEGAZE_MODULE_MAP_FILE", DEFAULT_MODULE_MAP_FILE)
+    module_index.update(load_module_map_file(map_file))
+    return module_index
+
 
 def parse_timestamp(value):
-    value = value.strip()
+    value = value.lstrip("\ufeff").strip()
     formats = [
         "%Y-%m-%dT%H:%M:%S.%fZ",
         "%Y-%m-%dT%H:%M:%SZ",
@@ -42,6 +178,20 @@ def normalize_ip(ip):
     return ip
 
 
+def resolve_module_viewed(fields, module_index):
+    for key in MODULE_NAME_KEYS:
+        value = (fields.get(key) or "").strip()
+        if value:
+            return module_index.get(normalize_lookup_key(value), value)
+
+    for key in MODULE_ID_KEYS:
+        value = (fields.get(key) or "").strip()
+        if value:
+            return module_index.get(normalize_lookup_key(value), value)
+
+    return "none"
+
+
 def iter_text_lines(file_path):
     if file_path.endswith(".zip"):
         with zipfile.ZipFile(file_path) as archive:
@@ -57,8 +207,8 @@ def iter_text_lines(file_path):
         yield from handle
 
 
-def parse_session_line(line):
-    parts = line.strip().split("\t")
+def parse_session_line(line, module_index):
+    parts = line.lstrip("\ufeff").strip().split("\t")
     if len(parts) < 4:
         return None
 
@@ -83,27 +233,31 @@ def parse_session_line(line):
         timestamp.strftime("%H:%M:%S"),
         normalize_ip(ip),
         timestamp.strftime("%Y-%m-%d"),
-        fields.get("moduleId", "none"),
+        resolve_module_viewed(fields, module_index),
         fields.get("durationSeconds", ""),
     ]
 
 
-def process_log_file(file_path):
+def process_log_file(file_path, module_index):
     log_data = []
     skipped_count = 0
     source_log = os.path.basename(file_path)
 
-    for line in iter_text_lines(file_path):
-        try:
-            row = parse_session_line(line)
-            if row:
-                log_data.append(row)
-            else:
+    try:
+        for line in iter_text_lines(file_path):
+            try:
+                row = parse_session_line(line, module_index)
+                if row:
+                    log_data.append(row)
+                else:
+                    skipped_count += 1
+            except Exception as exc:
                 skipped_count += 1
-        except Exception as exc:
-            skipped_count += 1
-            if skipped_count <= 3:
-                print(f"Skipping line in {source_log}: {exc}")
+                if skipped_count <= 3:
+                    print(f"Skipping line in {source_log}: {exc}")
+    except (OSError, zipfile.BadZipFile) as exc:
+        skipped_count += 1
+        print(f"Skipping file {source_log}: {exc}")
 
     print(f"Processed {source_log}: {len(log_data)} rows, {skipped_count} skipped")
     return log_data
@@ -175,13 +329,18 @@ if __name__ == "__main__":
                 files_to_process.append(os.path.join(root, file))
 
     clear_csv_outputs(processed_folder_path)
+    module_index = build_module_name_index()
+    if module_index:
+        print(f"Loaded {len(module_index)} ModuleGaze module aliases.")
+    else:
+        print("No ModuleGaze module aliases loaded; CSV will use raw moduleId values.")
 
     total_files = len(files_to_process)
     if total_files == 0:
         print(f"No ModuleGaze session log files found in {folder_path}.")
 
     for index, file_path in enumerate(sorted(files_to_process), start=1):
-        log_data = process_log_file(file_path)
+        log_data = process_log_file(file_path, module_index)
         save_processed_log_file(processed_folder_path, file_path, log_data)
         print(f"Processing files: {index}/{total_files}")
 

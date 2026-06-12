@@ -15,13 +15,34 @@ SERVICE_GROUP="$SERVICE_USER"
 
 ts(){ date '+%Y-%m-%d %H:%M:%S'; }
 say(){ echo "[$(ts)] $*"; }
-have(){ command -v "$1" >/dev/null 2>/dev/1; }
+have(){ command -v "$1" >/dev/null 2>/dev/null; }
 have_whiptail(){ have whiptail; }
 
 confirm(){
   local msg="$1"
   if have_whiptail; then whiptail --yesno "$msg" 10 74
   else read -rp "$msg [y/N]: " yn; [[ "${yn,,}" == "y" || "${yn,,}" == "yes" ]]
+  fi
+}
+
+confirm_default(){
+  local msg="$1" default="${2:-no}" yn prompt
+  default="${default,,}"
+  if have_whiptail; then
+    if [[ "$default" == "yes" || "$default" == "y" || "$default" == "1" || "$default" == "true" ]]; then
+      whiptail --yesno "$msg" 10 74
+    else
+      whiptail --defaultno --yesno "$msg" 10 74
+    fi
+  else
+    if [[ "$default" == "yes" || "$default" == "y" || "$default" == "1" || "$default" == "true" ]]; then
+      prompt="[Y/n]"
+    else
+      prompt="[y/N]"
+    fi
+    read -rp "$msg $prompt: " yn
+    yn="${yn:-$default}"
+    [[ "${yn,,}" == "y" || "${yn,,}" == "yes" || "${yn,,}" == "1" || "${yn,,}" == "true" ]]
   fi
 }
 
@@ -172,6 +193,8 @@ SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
 KOLIBRI_FACILITY_ID="${KOLIBRI_FACILITY_ID:-}"
 MODULEGAZE_ENABLED="${MODULEGAZE_ENABLED:-1}"
+MODULEGAZE_API_BASE_URL="${MODULEGAZE_API_BASE_URL:-http://127.0.0.1:3002}"
+MODULEGAZE_MODULE_MAP_FILE="${MODULEGAZE_MODULE_MAP_FILE:-$PROJECT_ROOT/config/oc4d/module-map.csv}"
 OC4D_ASSESSMENTS_ENABLED="${OC4D_ASSESSMENTS_ENABLED:-0}"
 OC4D_API_BASE_URL="${OC4D_API_BASE_URL:-http://127.0.0.1:3000}"
 OC4D_API_TOKEN="${OC4D_API_TOKEN:-}"
@@ -216,7 +239,7 @@ if [[ "$PYTHON_SCRIPT" != "cape_coast_d" && "$SCHEDULE_TYPE" == "hourly" ]]; the
   SCHEDULE_TYPE="daily"
 fi
 
-if confirm "Also collect/process/upload ModuleGaze logs when /var/log/modulegaze exists?"; then
+if confirm_default "Also collect/process/upload ModuleGaze logs when /var/log/modulegaze exists?" "$MODULEGAZE_ENABLED"; then
   MODULEGAZE_ENABLED="1"
 else
   MODULEGAZE_ENABLED="0"
@@ -234,7 +257,7 @@ pick_oc4d_parent_org() {
 }
 
 if [[ "$SERVER_VERSION" == "v2" || "$SERVER_VERSION" == "v6" ]]; then
-  if confirm "Also pull OC4D assessment results from the local OC4D API and upload to the OC4D reports bucket?"; then
+  if confirm_default "Also pull OC4D assessment results from the local OC4D API and upload to the OC4D reports bucket?" "$OC4D_ASSESSMENTS_ENABLED"; then
     OC4D_ASSESSMENTS_ENABLED="1"
     OC4D_API_BASE_URL="http://127.0.0.1:3000"
     OC4D_API_TOKEN=""
@@ -317,6 +340,7 @@ RACHEL subfolder: ${RACHEL_SUBFOLDER:-<RACHEL root>}
 Schedule       : $SCHEDULE_TYPE (interval=${RUN_INTERVAL}s)
 Kolibri facility: ${KOLIBRI_FACILITY_ID:-<default facility>}
 ModuleGaze     : $([[ "$MODULEGAZE_ENABLED" == "1" ]] && echo enabled || echo disabled)
+ModuleGaze API : ${MODULEGAZE_API_BASE_URL:-http://127.0.0.1:3002}
 OC4D assessments: $([[ "$OC4D_ASSESSMENTS_ENABLED" == "1" ]] && echo enabled || echo disabled)
 OC4D API       : ${OC4D_API_BASE_URL:-http://127.0.0.1:3000} (auto-auth)
 OC4D bucket    : ${OC4D_BUCKET:-oc4d-raw-reports}
@@ -341,6 +365,8 @@ SCHEDULE_TYPE="$SCHEDULE_TYPE"
 RUN_INTERVAL="$RUN_INTERVAL"
 KOLIBRI_FACILITY_ID="$KOLIBRI_FACILITY_ID"
 MODULEGAZE_ENABLED="$MODULEGAZE_ENABLED"
+MODULEGAZE_API_BASE_URL="$MODULEGAZE_API_BASE_URL"
+MODULEGAZE_MODULE_MAP_FILE="$MODULEGAZE_MODULE_MAP_FILE"
 OC4D_ASSESSMENTS_ENABLED="$OC4D_ASSESSMENTS_ENABLED"
 OC4D_API_BASE_URL="$OC4D_API_BASE_URL"
 OC4D_API_TOKEN="$OC4D_API_TOKEN"

@@ -51,6 +51,8 @@ SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
 KOLIBRI_FACILITY_ID="${KOLIBRI_FACILITY_ID:-}"
 MODULEGAZE_ENABLED="${MODULEGAZE_ENABLED:-1}"
+MODULEGAZE_API_BASE_URL="${MODULEGAZE_API_BASE_URL:-http://127.0.0.1:3002}"
+MODULEGAZE_MODULE_MAP_FILE="${MODULEGAZE_MODULE_MAP_FILE:-$PROJECT_ROOT/config/oc4d/module-map.csv}"
 OC4D_ASSESSMENTS_ENABLED="${OC4D_ASSESSMENTS_ENABLED:-0}"
 OC4D_API_BASE_URL="${OC4D_API_BASE_URL:-http://127.0.0.1:3000}"
 OC4D_API_TOKEN="${OC4D_API_TOKEN:-}"
@@ -225,7 +227,12 @@ process_modulegaze_logs() {
   fi
 
   log "[modulegaze][process] scripts/data/process/processors/modulegaze.py (folder=$modulegaze_folder)"
-  python3 "scripts/data/process/processors/modulegaze.py" "$modulegaze_folder"
+  if ! MODULEGAZE_API_BASE_URL="$MODULEGAZE_API_BASE_URL" \
+    MODULEGAZE_MODULE_MAP_FILE="$MODULEGAZE_MODULE_MAP_FILE" \
+    python3 "scripts/data/process/processors/modulegaze.py" "$modulegaze_folder"; then
+    log "[modulegaze][warn] ModuleGaze processing failed. Skipping ModuleGaze upload for this run."
+    return 0
+  fi
 
   if [[ ! -s "$modulegaze_summary" ]]; then
     log "[modulegaze] No new data in summary.csv. Skipping ModuleGaze upload."

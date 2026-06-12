@@ -329,14 +329,33 @@ def resolve_api_token(api_base: str, token: str) -> str:
 def fetch_api_payload(api_base: str, token: str, take: int) -> dict[str, Any]:
     api_base = api_base.rstrip("/")
     url = f"{api_base}/api/assessment-results?scope=all&take={take}"
-    headers = {"Accept": "application/json", "Authorization": f"Bearer {resolve_api_token(api_base, token)}"}
-    request = urllib.request.Request(url, headers=headers)
-    try:
+
+    def fetch_with_access_token(access_token: str) -> str:
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {access_token}",
+        }
+        request = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(request, timeout=60) as response:
-            body = response.read().decode("utf-8")
+            return response.read().decode("utf-8")
+
+    access_token = resolve_api_token(api_base, token)
+    try:
+        body = fetch_with_access_token(access_token)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"API fetch failed ({exc.code}): {detail}") from exc
+        if token and exc.code in (401, 403):
+            try:
+                body = fetch_with_access_token(resolve_api_token(api_base, ""))
+            except urllib.error.HTTPError as retry_exc:
+                retry_detail = retry_exc.read().decode("utf-8", errors="replace")
+                raise RuntimeError(
+                    f"API fetch failed after token refresh ({retry_exc.code}): {retry_detail}"
+                ) from retry_exc
+            except urllib.error.URLError as retry_exc:
+                raise RuntimeError(f"API fetch failed after token refresh: {retry_exc}") from retry_exc
+        else:
+            raise RuntimeError(f"API fetch failed ({exc.code}): {detail}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"API fetch failed: {exc}") from exc
     payload = json.loads(body)
