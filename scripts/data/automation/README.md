@@ -10,6 +10,7 @@ Key features
 
 - Scheduled runs via systemd timer (daily, weekly, monthly, custom, and hourly for Castle logs)
 - Offline-first uploads with queue flushing on the next successful run
+- Stage-isolated execution so RACHEL, ModuleGaze, OC4D assessments, and Kolibri each get a chance to upload even if another stage has no logs or hits a processing error
 - Shared S3 destination logic for `RACHEL/`, `Kolibri/`, `ModuleGaze/`, and OC4D assessment contract keys
 - ModuleGaze session log export from active `.log` files and daily `.log.zip` archives, with module IDs resolved to display names
 - Kolibri summary exports using the supported `kolibri manage exportlogs -l summary` CLI
@@ -88,7 +89,7 @@ Data flow
 
 - When enabled on Server v5/v6, fetches `GET /api/assessment-results?scope=all` from the configured OC4D API
 - Resolves cloud `studentId` via `config/oc4d/student-map.csv`; resolves `assessmentId` via `config/oc4d/assessment-map.csv` when present, otherwise generates a stable slug from the assessment title
-- Builds validated CSV artifacts with header row plus one data row per result
+- Builds validated CSV artifacts with header row plus one data row per result; if question metadata is missing, result answers are still exported under generic answer columns
 - Uploads to `OC4D_BUCKET` using strict keys: `{parentOrg}/Assessments/{studentId}/{assessmentId}/{base}__{isoTs}.csv`
 - If offline or upload fails, files are queued in `00_DATA/00_UPLOAD_QUEUE/OC4DAssessments/` with `.oc4dkey` sidecars
 

@@ -84,92 +84,128 @@ has_internet() {
   return 0
 }
 
-log "[collect] $COLLECT_DIR  (server=$SERVER_VERSION, device=$DEVICE_LOCATION)"
-mkdir -p "$COLLECT_DIR"
-case "$SERVER_VERSION" in
-  v1|server\ v4|v4)
-    LOG_DIR="/var/log/apache2"
-    find "$LOG_DIR" -type f -name 'access.log*' -exec cp {} "$COLLECT_DIR"/ \;
-    ;;
-  v2|server\ v5|v5)
-    LOG_DIR="/var/log/oc4d"
-    find "$LOG_DIR" -type f \( \
-       \( -name 'oc4d-*.log' ! -name 'oc4d-exceptions-*.log' \) -o \
-       \( -name 'capecoastcastle-*.log' ! -name 'capecoastcastle-exceptions-*.log' \) -o \
-       -name '*.gz' \) -exec cp {} "$COLLECT_DIR"/ \;
-    ;;
-  v3|dhub|d-hub)
-    LOG_DIR="/var/log/dhub"
-    find "$LOG_DIR" -type f -name '*.log' -exec cp {} "$COLLECT_DIR"/ \;
-    ;;
-  server\ v6|v6)
-    LOG_DIR="/var/log/oc4d"
-    find "$LOG_DIR" -type f -name 'oc4d-*.log' ! -name 'oc4d-exceptions-*.log' -exec cp {} "$COLLECT_DIR"/ \;
-    ;;
-  *)
-    log "[error] Unknown SERVER_VERSION '$SERVER_VERSION'"
-    exit 1
-    ;;
-esac
-
-shopt -s nullglob
-for gz in "$COLLECT_DIR"/*.gz; do
-  gzip -df "$gz" || true
-done
-shopt -u nullglob
-
-PROCESSOR=""
-case "$SERVER_VERSION" in
-  v1|v4)
-    PROCESSOR="scripts/data/process/processors/log.py"
-    ;;
-  v2|v5|server\ v5)
-    case "$PYTHON_SCRIPT" in
-      oc4d) PROCESSOR="scripts/data/process/processors/logv2.py" ;;
-      cape_coast_d) PROCESSOR="scripts/data/process/processors/castle.py" ;;
-      *) PROCESSOR="scripts/data/process/processors/logv2.py" ;;
-    esac
-    ;;
-  v3|dhub|d-hub)
-    PROCESSOR="scripts/data/process/processors/dhub.py"
-    ;;
-  server\ v6|v6)
-    PROCESSOR="scripts/data/process/processors/log-v6.py"
-    ;;
-esac
-
-log "[process] $PROCESSOR  (folder=$NEW_FOLDER)"
-python3 "$PROCESSOR" "$NEW_FOLDER"
-
-PROCESSED_DIR="$PROCESSED_ROOT/$NEW_FOLDER"
-SUMMARY="$PROCESSED_DIR/summary.csv"
 FINAL_CSV=""
 
-if [[ ! -s "$SUMMARY" ]]; then
-  log "[info] No new data in summary.csv. Skipping RACHEL upload for this run."
-else
+process_rachel_logs() {
+  local log_dir=""
+  local processor=""
+  local processed_dir="$PROCESSED_ROOT/$NEW_FOLDER"
+  local summary="$processed_dir/summary.csv"
+  local final_csv_basename=""
+  local file_size=""
+
+  log "[collect] $COLLECT_DIR  (server=$SERVER_VERSION, device=$DEVICE_LOCATION)"
+  mkdir -p "$COLLECT_DIR"
+  case "$SERVER_VERSION" in
+    v1|server\ v4|v4)
+      log_dir="/var/log/apache2"
+      [[ -d "$log_dir" ]] || { log "[rachel][warn] $log_dir not found. Skipping RACHEL."; return 0; }
+      find "$log_dir" -type f -name 'access.log*' -exec cp {} "$COLLECT_DIR"/ \; || {
+        log "[rachel][warn] RACHEL collection failed from $log_dir."
+        return 0
+      }
+      ;;
+    v2|server\ v5|v5)
+      log_dir="/var/log/oc4d"
+      [[ -d "$log_dir" ]] || { log "[rachel][warn] $log_dir not found. Skipping RACHEL."; return 0; }
+      find "$log_dir" -type f \( \
+         \( -name 'oc4d-*.log' ! -name 'oc4d-exceptions-*.log' \) -o \
+         \( -name 'capecoastcastle-*.log' ! -name 'capecoastcastle-exceptions-*.log' \) -o \
+         -name '*.gz' \) -exec cp {} "$COLLECT_DIR"/ \; || {
+        log "[rachel][warn] RACHEL collection failed from $log_dir."
+        return 0
+      }
+      ;;
+    v3|dhub|d-hub)
+      log_dir="/var/log/dhub"
+      [[ -d "$log_dir" ]] || { log "[rachel][warn] $log_dir not found. Skipping RACHEL."; return 0; }
+      find "$log_dir" -type f -name '*.log' -exec cp {} "$COLLECT_DIR"/ \; || {
+        log "[rachel][warn] RACHEL collection failed from $log_dir."
+        return 0
+      }
+      ;;
+    server\ v6|v6)
+      log_dir="/var/log/oc4d"
+      [[ -d "$log_dir" ]] || { log "[rachel][warn] $log_dir not found. Skipping RACHEL."; return 0; }
+      find "$log_dir" -type f -name 'oc4d-*.log' ! -name 'oc4d-exceptions-*.log' -exec cp {} "$COLLECT_DIR"/ \; || {
+        log "[rachel][warn] RACHEL collection failed from $log_dir."
+        return 0
+      }
+      ;;
+    *)
+      log "[rachel][warn] Unknown SERVER_VERSION '$SERVER_VERSION'. Skipping RACHEL."
+      return 0
+      ;;
+  esac
+
+  shopt -s nullglob
+  for gz in "$COLLECT_DIR"/*.gz; do
+    gzip -df "$gz" || true
+  done
+  shopt -u nullglob
+
+  case "$SERVER_VERSION" in
+    v1|v4)
+      processor="scripts/data/process/processors/log.py"
+      ;;
+    v2|v5|server\ v5)
+      case "$PYTHON_SCRIPT" in
+        oc4d) processor="scripts/data/process/processors/logv2.py" ;;
+        cape_coast_d) processor="scripts/data/process/processors/castle.py" ;;
+        *) processor="scripts/data/process/processors/logv2.py" ;;
+      esac
+      ;;
+    v3|dhub|d-hub)
+      processor="scripts/data/process/processors/dhub.py"
+      ;;
+    server\ v6|v6)
+      processor="scripts/data/process/processors/log-v6.py"
+      ;;
+  esac
+
+  if [[ -z "$processor" ]]; then
+    log "[rachel][warn] No processor selected for SERVER_VERSION='$SERVER_VERSION'. Skipping RACHEL."
+    return 0
+  fi
+
+  log "[process] $processor  (folder=$NEW_FOLDER)"
+  if ! python3 "$processor" "$NEW_FOLDER"; then
+    log "[rachel][warn] RACHEL processor failed. Continuing with other data stages."
+    return 0
+  fi
+
+  if [[ ! -s "$summary" ]]; then
+    log "[info] No new data in summary.csv. Skipping RACHEL upload for this run."
+    return 0
+  fi
+
   case "$SCHEDULE_TYPE" in
     hourly|daily|weekly|monthly|yearly|custom)
       log "[filter] Schedule '$SCHEDULE_TYPE'"
-      FINAL_CSV_BASENAME="$(python3 "scripts/data/automation/filter_time_based.py" "$PROCESSED_DIR" "$DEVICE_LOCATION" "$SCHEDULE_TYPE" "$RUN_INTERVAL")"
-      if [[ -n "$FINAL_CSV_BASENAME" ]]; then
-        FINAL_CSV="$PROCESSED_DIR/$FINAL_CSV_BASENAME"
+      if ! final_csv_basename="$(python3 "scripts/data/automation/filter_time_based.py" "$processed_dir" "$DEVICE_LOCATION" "$SCHEDULE_TYPE" "$RUN_INTERVAL")"; then
+        log "[rachel][warn] RACHEL time-window filter failed. Continuing with other data stages."
+        return 0
+      fi
+      if [[ -n "$final_csv_basename" ]]; then
+        FINAL_CSV="$processed_dir/$final_csv_basename"
       fi
       ;;
     *)
-      log "[error] Unknown SCHEDULE_TYPE '$SCHEDULE_TYPE' in config. Cannot filter."
-      exit 1
+      log "[rachel][warn] Unknown SCHEDULE_TYPE '$SCHEDULE_TYPE' in config. Skipping RACHEL upload."
+      return 0
       ;;
   esac
 
   if [[ -n "$FINAL_CSV" && -f "$FINAL_CSV" ]]; then
-    FILE_SIZE="$(du -h "$FINAL_CSV" | cut -f1)"
-    log "[upload] Prepared $(basename "$FINAL_CSV") ($FILE_SIZE)"
+    file_size="$(du -h "$FINAL_CSV" | cut -f1)"
+    log "[upload] Prepared $(basename "$FINAL_CSV") ($file_size)"
   else
     FINAL_CSV=""
     log "[info] No new entries matched the time period. Skipping RACHEL upload for this run."
   fi
-fi
+}
+
+process_rachel_logs
 
 ONLINE=0
 if has_internet; then
@@ -215,11 +251,14 @@ process_modulegaze_logs() {
   find "$modulegaze_collect_dir" -maxdepth 1 -type f \( \
     -name 'modulegaze-access*' -o \
     -name 'modulegaze-sessions*' \
-  \) -delete
+  \) -delete || log "[modulegaze][warn] Could not clear old collected ModuleGaze files."
   find "$log_dir" -type f \( \
     -name 'modulegaze-sessions.log' -o \
     -name 'modulegaze-sessions-*.log.zip' \
-  \) -exec cp {} "$modulegaze_collect_dir"/ \;
+  \) -exec cp {} "$modulegaze_collect_dir"/ \; || {
+    log "[modulegaze][warn] ModuleGaze collection failed from $log_dir."
+    return 0
+  }
 
   if ! find "$modulegaze_collect_dir" -type f | grep -q .; then
     log "[modulegaze] No ModuleGaze log files found. Skipping."
@@ -240,7 +279,10 @@ process_modulegaze_logs() {
   fi
 
   log "[modulegaze][filter] Schedule '$SCHEDULE_TYPE'"
-  modulegaze_final_basename="$(python3 "scripts/data/automation/filter_time_based.py" "$modulegaze_processed_dir" "$DEVICE_LOCATION" "$SCHEDULE_TYPE" "$RUN_INTERVAL" "modulegaze_logs")"
+  if ! modulegaze_final_basename="$(python3 "scripts/data/automation/filter_time_based.py" "$modulegaze_processed_dir" "$DEVICE_LOCATION" "$SCHEDULE_TYPE" "$RUN_INTERVAL" "modulegaze_logs")"; then
+    log "[modulegaze][warn] ModuleGaze time-window filter failed. Skipping ModuleGaze upload for this run."
+    return 0
+  fi
   if [[ -n "$modulegaze_final_basename" ]]; then
     modulegaze_final_csv="$modulegaze_processed_dir/$modulegaze_final_basename"
   fi
