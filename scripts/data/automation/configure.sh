@@ -84,6 +84,35 @@ menu_select_cancelable(){
 validate_device_location(){ [[ "$1" =~ ^[A-Za-z0-9_-]{2,64}$ ]]; }
 sanitize_subfolder(){ local sf="${1#/}"; sf="${sf%/}"; echo "$sf"; }
 
+ensure_local_oc4d_map_file(){
+  local dest="$1" example="$2" label="$3"
+  mkdir -p "$(dirname "$dest")"
+  if [[ -f "$dest" ]]; then
+    say "OC4D ${label}: keeping existing $(basename "$dest")"
+    return 0
+  fi
+  if [[ ! -f "$example" ]]; then
+    say "⚠️  OC4D ${label}: example template missing at $example"
+    return 1
+  fi
+  cp "$example" "$dest"
+  chown "${SERVICE_USER}:${SERVICE_GROUP}" "$dest" 2>/dev/null || sudo chown "${SERVICE_USER}:${SERVICE_GROUP}" "$dest" 2>/dev/null || true
+  chmod 600 "$dest" 2>/dev/null || true
+  say "OC4D ${label}: created $(basename "$dest") from template (optional overrides only)"
+}
+
+ensure_local_oc4d_map_files(){
+  local oc4d_dir="$PROJECT_ROOT/config/oc4d"
+  ensure_local_oc4d_map_file \
+    "$OC4D_STUDENT_MAP_FILE" \
+    "$oc4d_dir/student-map.example.csv" \
+    "student map"
+  ensure_local_oc4d_map_file \
+    "$OC4D_ASSESSMENT_MAP_FILE" \
+    "$oc4d_dir/assessment-map.example.csv" \
+    "assessment map"
+}
+
 aws_su(){
   if [[ -n "${SUDO_USER:-}" && "$SERVICE_USER" != "$USER" ]]; then sudo -u "$SERVICE_USER" aws "$@"
   else aws "$@"
@@ -272,7 +301,7 @@ if [[ "$SERVER_VERSION" == "v2" || "$SERVER_VERSION" == "v6" ]]; then
     OC4D_SOURCE_DIR=""
     OC4D_UPLOAD_MODE="direct_s3"
     say "OC4D API: ${OC4D_API_BASE_URL} (local; token auto-fetched at runtime)"
-    say "OC4D maps: ${OC4D_STUDENT_MAP_FILE} and ${OC4D_ASSESSMENT_MAP_FILE}"
+    say "OC4D maps: ${OC4D_STUDENT_MAP_FILE} and ${OC4D_ASSESSMENT_MAP_FILE} (optional overrides; auto-mapped by default)"
     say "OC4D unmapped students upload to: ${OC4D_UNASSIGNED_STUDENT_ID} (assign in cloud /admin/students)"
     pick_oc4d_bucket
     pick_oc4d_parent_org
@@ -395,6 +424,10 @@ mv -f "$tmp" "$CONFIG_FILE"
 sudo chown "${SERVICE_USER}:${SERVICE_GROUP}" "$CONFIG_FILE"
 sudo chmod 600 "$CONFIG_FILE"
 say "💾 Saved: $CONFIG_FILE (owner: $SERVICE_USER)"
+
+if [[ "$OC4D_ASSESSMENTS_ENABLED" == "1" ]]; then
+  ensure_local_oc4d_map_files || true
+fi
 
 # ---------- robust live test (NO region flags) ----------
 test_upload(){

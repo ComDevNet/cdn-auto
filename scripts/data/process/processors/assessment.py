@@ -1255,6 +1255,7 @@ def main() -> int:
     assessment_rows = load_mapping_file(
         assessment_map,
         ("source_assessment_name", "assessmentId", "parentOrg"),
+        missing_ok=True,
     )
     # Cloud roster rows are loaded first so the local CSV can override them.
     student_index = index_mapping(cloud_student_rows + local_student_rows, "source_student_name")
