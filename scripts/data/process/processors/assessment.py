@@ -10,8 +10,10 @@ import csv
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,8 +64,15 @@ def build_object_key(
     return key
 
 
-def load_mapping_file(path: Path, required_columns: tuple[str, ...]) -> list[dict[str, str]]:
+def load_mapping_file(
+    path: Path,
+    required_columns: tuple[str, ...],
+    *,
+    missing_ok: bool = False,
+) -> list[dict[str, str]]:
     if not path.exists():
+        if missing_ok:
+            return []
         raise FileNotFoundError(f"mapping file not found: {path}")
 
     rows: list[dict[str, str]] = []
@@ -91,6 +100,320 @@ def index_mapping(rows: list[dict[str, str]], source_key: str) -> dict[str, dict
         key = row[source_key].strip().lower()
         indexed[key] = row
     return indexed
+
+
+def warn(message: str) -> None:
+    print(json.dumps({"warn": message}), file=sys.stderr)
+
+
+def normalize_identity(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def username_from_email(value: Any) -> str:
+    email = normalize_identity(value)
+    if "@" not in email:
+        return ""
+    return email.split("@", 1)[0].strip()
+
+
+def student_id_slug(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return safe_base_name(raw)
+
+
+def bool_from_env(value: str, default: bool = False) -> bool:
+    raw = value.strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def mapping_rows_for_cloud_student(student: dict[str, Any], default_parent_org: str) -> list[dict[str, str]]:
+    metadata = student.get("metadata")
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    student_id = str(student.get("studentId") or student.get("id") or "").strip()
+    if not student_id:
+        return []
+    if bool(student.get("archived")):
+        return []
+
+    parent_org = str(student.get("parentOrg") or default_parent_org).strip() or default_parent_org
+    display_name = str(student.get("displayName") or student.get("name") or "").strip()
+    email = str(
+        student.get("studentEmail")
+        or student.get("email")
+        or metadata.get("studentEmail")
+        or metadata.get("email")
+        or ""
+    ).strip()
+    username = str(
+        student.get("studentUsername")
+        or student.get("username")
+        or metadata.get("studentUsername")
+        or metadata.get("username")
+        or ""
+    ).strip()
+
+    keys = [
+        student_id,
+        display_name,
+        email,
+        username,
+        username_from_email(email),
+        student_id_slug(display_name),
+        student_id_slug(email),
+        student_id_slug(username),
+        student_id_slug(username_from_email(email)),
+    ]
+
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for key in keys:
+        normalized = normalize_identity(key)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        rows.append(
+            {
+                "source_student_name": normalized,
+                "studentId": student_id,
+                "parentOrg": parent_org,
+            }
+        )
+    return rows
+
+
+def students_from_payload(payload: Any, default_parent_org: str) -> list[dict[str, str]]:
+    if isinstance(payload, dict):
+        raw_students = (
+            payload.get("students")
+            or payload.get("data")
+            or payload.get("items")
+            or payload.get("results")
+            or []
+        )
+    elif isinstance(payload, list):
+        raw_students = payload
+    else:
+        raw_students = []
+
+    rows: list[dict[str, str]] = []
+    if not isinstance(raw_students, list):
+        return rows
+    for student in raw_students:
+        if isinstance(student, dict):
+            rows.extend(mapping_rows_for_cloud_student(student, default_parent_org))
+    return rows
+
+
+def read_json_or_csv_mapping(raw: str, default_parent_org: str) -> list[dict[str, str]]:
+    text = raw.strip()
+    if not text:
+        return []
+    if text[0] in "[{":
+        return students_from_payload(json.loads(text), default_parent_org)
+
+    rows: list[dict[str, str]] = []
+    reader = csv.DictReader(text.splitlines())
+    for row in reader:
+        if not row:
+            continue
+        if {"source_student_name", "studentId", "parentOrg"}.issubset(row.keys()):
+            source = (row.get("source_student_name") or "").strip()
+            if source:
+                rows.append(
+                    {
+                        "source_student_name": source,
+                        "studentId": (row.get("studentId") or "").strip(),
+                        "parentOrg": (row.get("parentOrg") or default_parent_org).strip(),
+                    }
+                )
+        else:
+            rows.extend(mapping_rows_for_cloud_student(row, default_parent_org))
+    return [row for row in rows if all(row.values())]
+
+
+def fetch_url_text(url: str, token: str = "") -> str:
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return response.read().decode("utf-8")
+
+
+def cloud_students_url(base_url: str, parent_org: str) -> str:
+    base = base_url.rstrip("/")
+    encoded_parent = urllib.parse.quote(parent_org, safe="")
+    return f"{base}/students/{encoded_parent}"
+
+
+def aws_region_args() -> list[str]:
+    region = (
+        os.environ.get("AWS_REGION")
+        or os.environ.get("AWS_DEFAULT_REGION")
+        or os.environ.get("OC4D_AWS_REGION")
+        or ""
+    ).strip()
+    return ["--region", region] if region else []
+
+
+def fetch_s3_text(s3_uri: str) -> str:
+    cmd = ["aws", *aws_region_args(), "s3", "cp", s3_uri, "-"]
+    result = subprocess.run(cmd, check=False, text=True, capture_output=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "aws s3 cp failed")
+    return result.stdout
+
+
+def parse_s3_bucket_uri(value: str) -> tuple[str, str]:
+    raw = value.strip()
+    if raw.startswith("s3://"):
+        raw = raw[5:]
+    raw = raw.strip("/")
+    if not raw:
+        return "", ""
+    bucket, _, prefix = raw.partition("/")
+    return bucket, prefix.strip("/")
+
+
+def list_s3_common_prefixes(bucket_uri: str, prefix: str) -> list[str]:
+    bucket, bucket_prefix = parse_s3_bucket_uri(bucket_uri)
+    if not bucket:
+        return []
+    full_prefix = "/".join(part.strip("/") for part in (bucket_prefix, prefix) if part.strip("/"))
+    if full_prefix and not full_prefix.endswith("/"):
+        full_prefix += "/"
+
+    prefixes: list[str] = []
+    token = ""
+    while True:
+        cmd = [
+            "aws",
+            *aws_region_args(),
+            "s3api",
+            "list-objects-v2",
+            "--bucket",
+            bucket,
+            "--prefix",
+            full_prefix,
+            "--delimiter",
+            "/",
+            "--output",
+            "json",
+        ]
+        if token:
+            cmd.extend(["--continuation-token", token])
+        result = subprocess.run(cmd, check=False, text=True, capture_output=True, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "aws s3api list failed")
+        payload = json.loads(result.stdout or "{}")
+        for item in payload.get("CommonPrefixes") or []:
+            item_prefix = str(item.get("Prefix") or "")
+            student_id = item_prefix[len(full_prefix) :].strip("/").split("/", 1)[0].strip()
+            if student_id:
+                prefixes.append(student_id)
+        if not payload.get("IsTruncated"):
+            break
+        token = str(payload.get("NextContinuationToken") or "")
+        if not token:
+            break
+    return prefixes
+
+
+def load_cloud_student_rows(default_parent_org: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+
+    local_file = os.environ.get("OC4D_CLOUD_STUDENT_MAP_FILE", "").strip()
+    if local_file:
+        try:
+            rows.extend(read_json_or_csv_mapping(Path(local_file).read_text(encoding="utf-8"), default_parent_org))
+        except Exception as exc:
+            warn(f"cloud student map file failed: {exc}")
+
+    s3_uri = os.environ.get("OC4D_CLOUD_STUDENT_MAP_S3_URI", "").strip()
+    if s3_uri:
+        try:
+            rows.extend(read_json_or_csv_mapping(fetch_s3_text(s3_uri), default_parent_org))
+        except Exception as exc:
+            warn(f"cloud student map S3 fetch failed: {exc}")
+
+    exact_url = os.environ.get("OC4D_CLOUD_STUDENT_MAP_URL", "").strip()
+    api_base = os.environ.get("OC4D_CLOUD_STUDENTS_API_BASE_URL", "").strip()
+    token = os.environ.get("OC4D_CLOUD_API_TOKEN", "").strip()
+    urls = []
+    if exact_url:
+        urls.append(exact_url.replace("{parentOrg}", urllib.parse.quote(default_parent_org, safe="")))
+    if api_base:
+        urls.append(cloud_students_url(api_base, default_parent_org))
+
+    for url in urls:
+        try:
+            rows.extend(read_json_or_csv_mapping(fetch_url_text(url, token), default_parent_org))
+        except Exception as exc:
+            warn(f"cloud student map URL fetch failed for {url}: {exc}")
+
+    return rows
+
+
+def load_cloud_student_prefix_ids(
+    bucket_uri: str,
+    parent_org: str,
+    unassigned_student_id: str,
+) -> dict[str, str]:
+    if not bucket_uri or not bool_from_env(os.environ.get("OC4D_STUDENT_PREFIX_SYNC", "1"), True):
+        return {}
+
+    ids: set[str] = set()
+    for folder in ("Assessments", "StudentReports", "RACHEL", "Kolibri"):
+        try:
+            ids.update(list_s3_common_prefixes(bucket_uri, f"{parent_org}/{folder}/"))
+        except FileNotFoundError:
+            warn("aws CLI not found; skipping S3 student prefix sync")
+            return {}
+        except Exception as exc:
+            warn(f"S3 student prefix sync failed for {folder}: {exc}")
+
+    ignored = {normalize_identity(unassigned_student_id), ""}
+    return {
+        normalize_identity(student_id): student_id
+        for student_id in ids
+        if normalize_identity(student_id) not in ignored
+    }
+
+
+def student_prefix_candidates(
+    *,
+    user_id: str = "",
+    user_name: str = "",
+    user_email: str = "",
+    user_username: str = "",
+) -> list[str]:
+    raw_candidates = [
+        user_username,
+        username_from_email(user_email),
+        user_email,
+        user_name,
+        user_id,
+    ]
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_candidates:
+        for candidate in (normalize_identity(raw), student_id_slug(raw)):
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                candidates.append(candidate)
+    return candidates
 
 
 def resolve_student_mapping(
@@ -124,6 +447,7 @@ def resolve_student_id(
     student_index: dict[str, dict[str, str]],
     default_parent_org: str,
     unassigned_student_id: str,
+    cloud_student_ids: dict[str, str] | None = None,
     *,
     user_id: str = "",
     user_name: str = "",
@@ -141,6 +465,15 @@ def resolve_student_id(
         )
         return student_id, parent_org, False
     except KeyError:
+        for candidate in student_prefix_candidates(
+            user_id=user_id,
+            user_name=user_name,
+            user_email=user_email,
+            user_username=user_username,
+        ):
+            matched_student_id = cloud_student_ids.get(candidate) if cloud_student_ids else ""
+            if matched_student_id:
+                return matched_student_id, default_parent_org, False
         return unassigned_student_id, default_parent_org, True
 
 
@@ -455,6 +788,7 @@ def process_api_results(
     payload: dict[str, Any],
     *,
     student_index: dict[str, dict[str, str]],
+    cloud_student_ids: dict[str, str],
     assessment_index: dict[str, dict[str, str]],
     default_parent_org: str,
     unassigned_student_id: str,
@@ -501,6 +835,7 @@ def process_api_results(
                 student_index,
                 default_parent_org,
                 unassigned_student_id,
+                cloud_student_ids,
                 user_id=user_id,
                 user_name=user_name,
                 user_email=user_email,
@@ -909,13 +1244,36 @@ def main() -> int:
     api_base = os.environ.get("OC4D_API_BASE_URL", "http://127.0.0.1:3000").strip()
     api_token = os.environ.get("OC4D_API_TOKEN", "").strip()
     api_take = int(os.environ.get("OC4D_API_TAKE", "2000"))
+    oc4d_bucket = os.environ.get("OC4D_BUCKET", "").strip()
 
-    student_rows = load_mapping_file(student_map, ("source_student_name", "studentId", "parentOrg"))
+    local_student_rows = load_mapping_file(
+        student_map,
+        ("source_student_name", "studentId", "parentOrg"),
+        missing_ok=True,
+    )
+    cloud_student_rows = load_cloud_student_rows(default_parent_org)
     assessment_rows = load_mapping_file(
         assessment_map,
         ("source_assessment_name", "assessmentId", "parentOrg"),
     )
-    student_index = index_mapping(student_rows, "source_student_name")
+    # Cloud roster rows are loaded first so the local CSV can override them.
+    student_index = index_mapping(cloud_student_rows + local_student_rows, "source_student_name")
+    cloud_student_ids = load_cloud_student_prefix_ids(
+        oc4d_bucket,
+        default_parent_org,
+        unassigned_student_id,
+    )
+    if cloud_student_rows or cloud_student_ids:
+        print(
+            json.dumps(
+                {
+                    "source": "student-map",
+                    "cloud_rows": len(cloud_student_rows),
+                    "local_rows": len(local_student_rows),
+                    "cloud_prefix_ids": len(cloud_student_ids),
+                }
+            )
+        )
     assessment_index = index_mapping(assessment_rows, "source_assessment_name")
     uploaded_ids = load_state(state_file)
 
@@ -947,6 +1305,7 @@ def main() -> int:
         api_entries, _ = process_api_results(
             payload,
             student_index=student_index,
+            cloud_student_ids=cloud_student_ids,
             assessment_index=assessment_index,
             default_parent_org=default_parent_org,
             unassigned_student_id=unassigned_student_id,
