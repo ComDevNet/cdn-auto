@@ -1,6 +1,7 @@
 #!/bin/bash
 
 PROJECT_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../../.." >/dev/null 2>&1 && pwd)"
+cd "$PROJECT_ROOT"
 # shellcheck disable=SC1091
 source "$PROJECT_ROOT/scripts/data/lib/s3_picker_helpers.sh"
 # shellcheck disable=SC1091
@@ -51,7 +52,11 @@ while true; do
     fi
 done
 
-processed_run_name="$(basename -- "$folder")"
+processed_run_name="$(basename -- "${folder%/}")"
+if ! processed_run_name="$(normalize_log_run_name "$processed_run_name")"; then
+    echo -e "${RED}Selected folder is not a valid ModuleGaze log run folder.${NC}"
+    exit 1
+fi
 PROCESSED_ROOT="$PROJECT_ROOT/00_DATA/00_PROCESSED"
 
 summary_file="$folder/summary.csv"
@@ -97,6 +102,7 @@ if [ -f "$processed_path" ]; then
     fi
 else
     echo -e "${RED}Processed file not found. Something went wrong during CSV processing.${NC}"
+    cleanup_processed_run_folder "$PROCESSED_ROOT" "$processed_run_name"
 fi
 
 sleep 2

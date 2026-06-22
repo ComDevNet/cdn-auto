@@ -120,6 +120,7 @@ Log folder cleanup (RACHEL and ModuleGaze)
 - After successful processing, the raw run folder under `00_DATA/<RUN_FOLDER>/` is removed automatically
 - After a successful upload, or when the time window has no rows to upload, the matching folder under `00_DATA/00_PROCESSED/<RUN_FOLDER>/` is removed
 - If an upload fails or is queued for retry, the processed folder is kept until a later successful upload (direct or via queue flush)
+- Queued RACHEL/ModuleGaze CSVs store a `.cdnrun` sidecar with the processed run folder name so flush cleanup targets the correct folder
 - Kolibri exports and OC4D assessment staging are not auto-deleted by this cleanup
 
 Commands

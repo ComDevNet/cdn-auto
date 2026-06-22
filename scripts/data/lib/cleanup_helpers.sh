@@ -18,6 +18,7 @@ log_cleanup() {
 
 is_log_run_name() {
   local name="${1:?run name required}"
+  name="${name%/}"
 
   if [[ "$name" == *"/"* || "$name" == *".."* ]]; then
     return 1
@@ -33,11 +34,47 @@ is_log_run_name() {
   [[ "$name" =~ ^[A-Za-z0-9_-]+_(modulegaze_)?logs_[0-9]{4}_[0-9]{2}_[0-9]{2}$ ]]
 }
 
+normalize_log_run_name() {
+  local name="${1:?run name required}"
+  name="${name%/}"
+  if ! is_log_run_name "$name"; then
+    return 1
+  fi
+  printf '%s\n' "$name"
+}
+
+queue_run_sidecar_for() {
+  printf '%s\n' "${1}.cdnrun"
+}
+
+write_queue_run_sidecar() {
+  local queued_csv="$1"
+  local run_name="$2"
+
+  [[ -n "$run_name" ]] || return 0
+  run_name="$(normalize_log_run_name "$run_name")" || return 0
+  printf '%s\n' "$run_name" > "$(queue_run_sidecar_for "$queued_csv")"
+}
+
+read_queue_run_sidecar() {
+  local queued_csv="$1"
+  local sidecar run_name
+
+  sidecar="$(queue_run_sidecar_for "$queued_csv")"
+  [[ -f "$sidecar" ]] || return 1
+  run_name="$(tr -d '\r\n' < "$sidecar" | head -n1)"
+  normalize_log_run_name "$run_name"
+}
+
+remove_queue_run_sidecar() {
+  rm -f "$(queue_run_sidecar_for "$1")"
+}
+
 _resolve_child_dir() {
   local parent_dir="$1"
   local child_name="$2"
 
-  if ! is_log_run_name "$child_name"; then
+  if ! child_name="$(normalize_log_run_name "$child_name")"; then
     return 1
   fi
 
@@ -70,43 +107,58 @@ _remove_dir_if_safe() {
 cleanup_raw_run_folder() {
   local data_dir="${1:?data dir required}"
   local run_name="${2:?run name required}"
-  local target
+  local target normalized_name
 
-  if ! target="$(_resolve_child_dir "$data_dir" "$run_name")"; then
-    log_cleanup "Skipped raw cleanup for invalid or missing run folder: $run_name"
+  if ! normalized_name="$(normalize_log_run_name "$run_name")"; then
+    log_cleanup "Skipped raw cleanup for invalid run folder name: $run_name"
+    return 0
+  fi
+
+  if ! target="$(_resolve_child_dir "$data_dir" "$normalized_name")"; then
+    log_cleanup "Skipped raw cleanup for missing run folder: $normalized_name"
     return 0
   fi
 
   if _remove_dir_if_safe "$target"; then
-    log_cleanup "Removed raw run folder: $run_name"
+    log_cleanup "Removed raw run folder: $normalized_name"
   else
-    log_cleanup "Could not remove raw run folder: $run_name"
+    log_cleanup "Could not remove raw run folder: $normalized_name"
   fi
 }
 
 cleanup_processed_run_folder() {
   local processed_root="${1:?processed root required}"
   local run_name="${2:?run name required}"
-  local target
+  local target normalized_name
 
-  if ! target="$(_resolve_child_dir "$processed_root" "$run_name")"; then
-    log_cleanup "Skipped processed cleanup for invalid or missing run folder: $run_name"
+  if ! normalized_name="$(normalize_log_run_name "$run_name")"; then
+    log_cleanup "Skipped processed cleanup for invalid run folder name: $run_name"
+    return 0
+  fi
+
+  if ! target="$(_resolve_child_dir "$processed_root" "$normalized_name")"; then
+    log_cleanup "Skipped processed cleanup for missing run folder: $normalized_name"
     return 0
   fi
 
   if _remove_dir_if_safe "$target"; then
-    log_cleanup "Removed processed run folder: $run_name"
+    log_cleanup "Removed processed run folder: $normalized_name"
   else
-    log_cleanup "Could not remove processed run folder: $run_name"
+    log_cleanup "Could not remove processed run folder: $normalized_name"
   fi
 }
 
 cleanup_processed_for_uploaded_csv() {
   local processed_root="${1:-}"
   local csv_path="${2:?csv path required}"
-  local basename run_name parent_dir
+  local basename run_name parent_dir sidecar_run_name
 
   if [[ -z "$processed_root" || ! -d "$processed_root" ]]; then
+    return 0
+  fi
+
+  if sidecar_run_name="$(read_queue_run_sidecar "$csv_path" 2>/dev/null)"; then
+    cleanup_processed_run_folder "$processed_root" "$sidecar_run_name"
     return 0
   fi
 

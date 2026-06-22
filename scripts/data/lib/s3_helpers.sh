@@ -96,11 +96,17 @@ queue_one() {
   local file_path="$1"
   local queue_root="${2:?queue root required}"
   local folder_name="${3:-RACHEL}"
+  local run_name="${4:-}"
   local target_dir
+  local queued_csv
 
   target_dir="$(queue_dir_for_folder "$queue_root" "$folder_name")"
   mkdir -p "$target_dir"
   cp -f "$file_path" "$target_dir/"
+  queued_csv="$target_dir/$(basename "$file_path")"
+  if [[ -n "$run_name" && ("$folder_name" == "RACHEL" || "$folder_name" == "ModuleGaze") ]]; then
+    write_queue_run_sidecar "$queued_csv" "$run_name"
+  fi
   log "[queue] Queued $(basename "$file_path") for $folder_name uploads."
 }
 
@@ -120,10 +126,11 @@ flush_queue_dir() {
 
   for queued_file in "${files[@]}"; do
     if upload_one "$queued_file" "$folder_name"; then
-      rm -f "$queued_file"
       if [[ -n "${CDN_AUTO_PROCESSED_ROOT:-}" && ("$folder_name" == "RACHEL" || "$folder_name" == "ModuleGaze") ]]; then
         cleanup_processed_for_uploaded_csv "$CDN_AUTO_PROCESSED_ROOT" "$queued_file"
       fi
+      rm -f "$queued_file"
+      remove_queue_run_sidecar "$queued_file"
     else
       log "Leaving queued: $(basename "$queued_file")"
       failed=1

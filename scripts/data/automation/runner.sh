@@ -12,7 +12,6 @@ cd "$PROJECT_ROOT"
 source "$PROJECT_ROOT/scripts/data/lib/s3_helpers.sh"
 source "$PROJECT_ROOT/scripts/data/lib/kolibri_helpers.sh"
 source "$PROJECT_ROOT/scripts/data/lib/oc4d_assessment_helpers.sh"
-source "$PROJECT_ROOT/scripts/data/lib/cleanup_helpers.sh"
 
 CONFIG_FILE="$PROJECT_ROOT/config/automation.conf"
 
@@ -233,10 +232,10 @@ if [[ -n "$FINAL_CSV" ]]; then
       cleanup_processed_run_folder "$PROCESSED_ROOT" "$NEW_FOLDER"
     else
       log "[warn] Upload failed; queueing new RACHEL file."
-      queue_one "$FINAL_CSV" "$QUEUE_DIR" "RACHEL"
+      queue_one "$FINAL_CSV" "$QUEUE_DIR" "RACHEL" "$NEW_FOLDER"
     fi
   else
-    queue_one "$FINAL_CSV" "$QUEUE_DIR" "RACHEL"
+    queue_one "$FINAL_CSV" "$QUEUE_DIR" "RACHEL" "$NEW_FOLDER"
   fi
 fi
 
@@ -314,10 +313,10 @@ process_modulegaze_logs() {
       cleanup_processed_run_folder "$PROCESSED_ROOT" "$modulegaze_folder"
     else
       log "[modulegaze][warn] Upload failed; queueing new ModuleGaze file."
-      queue_one "$modulegaze_final_csv" "$QUEUE_DIR" "ModuleGaze"
+      queue_one "$modulegaze_final_csv" "$QUEUE_DIR" "ModuleGaze" "$modulegaze_folder"
     fi
   else
-    queue_one "$modulegaze_final_csv" "$QUEUE_DIR" "ModuleGaze"
+    queue_one "$modulegaze_final_csv" "$QUEUE_DIR" "ModuleGaze" "$modulegaze_folder"
   fi
 }
 
