@@ -15,6 +15,8 @@ Outputs
 
 - summary.csv written to 00_DATA/00_PROCESSED/RUN_FOLDER/
 - Individual per-file CSVs are also generated alongside summary.csv
+- After successful processing, the raw collection folder in 00_DATA/RUN_FOLDER/ is removed automatically
+- After a successful upload, or when filtering finds no rows for the selected period, the processed folder in 00_DATA/00_PROCESSED/RUN_FOLDER/ is removed
 
 CSV schemas
 
@@ -29,7 +31,7 @@ Notes & edge cases
 
 - logv2.py expects each line to be JSON with a message field containing a combined-log-like string
 - dhub.py is based on logv2.py but extracts module names from extended D-Hub paths: `/uploads/modules/[id]/[module-name]`, `/modules/[id]/[module-name]`, or `/uploads/other-modules/[module-name]`
-- log-v6.py is similar to dhub.py but for logs stored in /var/log/oc4d folder with v6-*.log filename pattern
+- log-v6.py is similar to dhub.py but for logs stored in /var/log/oc4d folder with oc4d-*.log filename pattern
 - castle.py parses a more structured message; it logs regex and timestamp errors into error_log.txt in the processed folder and normalizes IPv6 ::ffff: prefix
 - All processors normalize sizes to gigabytes and parse user agents to OS family and browser family
 - ModuleGaze processing uses only session-duration rows from modulegaze-sessions logs so it can be filtered and uploaded as one monthly or scheduled CSV

@@ -32,6 +32,11 @@ echo ""
 read -p "You selected '${selected_folder}'. Press Enter to confirm and start processing..."
 
 python3 "$python_script_path" "$selected_folder"
+if [[ $? -eq 0 ]]; then
+    # shellcheck disable=SC1091
+    source "scripts/data/lib/cleanup_helpers.sh"
+    cleanup_raw_run_folder "00_DATA" "$selected_folder"
+fi
 
 echo ""
 echo "Processing completed."

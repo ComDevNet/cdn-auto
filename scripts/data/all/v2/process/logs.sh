@@ -59,7 +59,11 @@ fi
 selected_folder=${folders[$((folder_number-1))]#00_DATA/}
 
 # Run the Python script with the selected folder as an argument
-python3 "$python_script_path" "$selected_folder"
+if python3 "$python_script_path" "$selected_folder"; then
+    # shellcheck disable=SC1091
+    source "scripts/data/lib/cleanup_helpers.sh"
+    cleanup_raw_run_folder "00_DATA" "$selected_folder"
+fi
 
 echo ""
 echo "Processing completed successfully."

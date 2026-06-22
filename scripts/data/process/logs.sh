@@ -64,7 +64,11 @@ elif [[ "$user_choice" == "3" ]]; then
     selected_folder=${folders[$((folder_number-1))]#00_DATA/}
     
     # Run log-v6.py with the selected folder
-    python3 ./scripts/data/process/processors/log-v6.py "$selected_folder"
+    if python3 ./scripts/data/process/processors/log-v6.py "$selected_folder"; then
+        # shellcheck disable=SC1091
+        source "scripts/data/lib/cleanup_helpers.sh"
+        cleanup_raw_run_folder "00_DATA" "$selected_folder"
+    fi
     sleep 2
     exec ./scripts/data/main.sh
 elif [[ "$user_choice" == "4" ]]; then
@@ -101,7 +105,11 @@ elif [[ "$user_choice" == "4" ]]; then
     selected_folder=${folders[$((folder_number-1))]#00_DATA/}
     
     # Run dhub.py with the selected folder
-    python3 ./scripts/data/process/processors/dhub.py "$selected_folder"
+    if python3 ./scripts/data/process/processors/dhub.py "$selected_folder"; then
+        # shellcheck disable=SC1091
+        source "scripts/data/lib/cleanup_helpers.sh"
+        cleanup_raw_run_folder "00_DATA" "$selected_folder"
+    fi
     sleep 2
     exec ./scripts/data/main.sh
 elif [[ "$user_choice" == "5" ]]; then

@@ -1,5 +1,9 @@
 #!/bin/bash
 
+_helpers_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+# shellcheck disable=SC1091
+source "$_helpers_dir/cleanup_helpers.sh"
+
 join_path() {
   local a="${1%/}"
   local b="${2#/}"
@@ -117,6 +121,9 @@ flush_queue_dir() {
   for queued_file in "${files[@]}"; do
     if upload_one "$queued_file" "$folder_name"; then
       rm -f "$queued_file"
+      if [[ -n "${CDN_AUTO_PROCESSED_ROOT:-}" && ("$folder_name" == "RACHEL" || "$folder_name" == "ModuleGaze") ]]; then
+        cleanup_processed_for_uploaded_csv "$CDN_AUTO_PROCESSED_ROOT" "$queued_file"
+      fi
     else
       log "Leaving queued: $(basename "$queued_file")"
       failed=1

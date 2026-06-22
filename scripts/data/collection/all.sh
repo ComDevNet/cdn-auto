@@ -72,8 +72,13 @@ elif [[ "$log_choice" == "2" ]]; then
         \) \
         -exec cp {} "$new_folder"/ \;
 elif [[ "$log_choice" == "3" ]]; then
-    # For V6 logs: Collect v6-*.log files (excluding exceptions)
-    find "$log_directory" -type f -name "v6-*.log" ! -name "v6-exceptions-*.log" \
+    # For V6 logs: Collect oc4d-*.log files (excluding exceptions), include gz if present
+    find "$log_directory" -type f \
+        \( \
+            \( -name "oc4d-*.log" ! -name "oc4d-exceptions-*.log" \) \
+            -o \
+            -name "oc4d-*.log.gz" \
+        \) \
         -exec cp {} "$new_folder"/ \;
 elif [[ "$log_choice" == "4" ]]; then
     # For D-Hub logs: Collect *.log files

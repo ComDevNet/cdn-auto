@@ -29,6 +29,7 @@ Components
 - `flush_queue.sh` - uploads queued CSVs for `RACHEL/`, `Kolibri/`, `ModuleGaze/`, and `OC4DAssessments/`
 - `filter_time_based.py` - builds final CSVs for scheduled windows
 - `scripts/data/lib/s3_helpers.sh` - shared bucket, upload, and queue helpers
+- `scripts/data/lib/cleanup_helpers.sh` - safe removal of raw and processed RACHEL/ModuleGaze run folders
 - `scripts/data/lib/kolibri_helpers.sh` - shared Kolibri facility resolution and summary export helpers
 - `scripts/data/lib/oc4d_assessment_helpers.sh` - OC4D assessment key builder, API fetch, and contract-key upload/queue helpers
 - `scripts/data/process/processors/assessment.py` - fetches assessment results and emits validated CSV artifacts plus `manifest.json`
@@ -114,6 +115,13 @@ Where things live
 - Upload queue: `00_DATA/00_UPLOAD_QUEUE/`
 - Logs: `/var/log/v5_log_processor/automation.log` and `journalctl -u v5-log-processor.service`
 
+Log folder cleanup (RACHEL and ModuleGaze)
+
+- After successful processing, the raw run folder under `00_DATA/<RUN_FOLDER>/` is removed automatically
+- After a successful upload, or when the time window has no rows to upload, the matching folder under `00_DATA/00_PROCESSED/<RUN_FOLDER>/` is removed
+- If an upload fails or is queued for retry, the processed folder is kept until a later successful upload (direct or via queue flush)
+- Kolibri exports and OC4D assessment staging are not auto-deleted by this cleanup
+
 Commands
 
 - Install: `sudo ./scripts/data/automation/install.sh`
@@ -128,6 +136,7 @@ Troubleshooting
 
 - Use `./scripts/data/automation/status.sh` to see timer state, queue contents, connectivity, AWS identity, and recent logs
 - If uploads fail, the automation keeps the CSV in the matching queue folder for the next run
+- If a RACHEL or ModuleGaze upload was queued, the processed run folder stays on disk until the queue flush succeeds
 - If ModuleGaze CSVs still show raw IDs, confirm `curl -s http://127.0.0.1:3002/api/modules` returns module rows or add mappings to `config/oc4d/module-map.csv`
 - If Kolibri export fails on `0.19.2`, confirm the command still receives both `--start_date` and `--end_date`
 - If `KOLIBRI_FACILITY_ID` is not set, the scripts use Kolibri's default facility automatically

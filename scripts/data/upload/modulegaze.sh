@@ -3,6 +3,8 @@
 PROJECT_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../../.." >/dev/null 2>&1 && pwd)"
 # shellcheck disable=SC1091
 source "$PROJECT_ROOT/scripts/data/lib/s3_picker_helpers.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_ROOT/scripts/data/lib/cleanup_helpers.sh"
 
 CONFIG_FILE="config/automation.conf"
 S3_BUCKET_DEFAULT="s3://rachel-upload-test"
@@ -49,6 +51,9 @@ while true; do
     fi
 done
 
+processed_run_name="$(basename -- "$folder")"
+PROCESSED_ROOT="$PROJECT_ROOT/00_DATA/00_PROCESSED"
+
 summary_file="$folder/summary.csv"
 summary_copy="$folder/summary_copy.csv"
 if [ ! -f "$summary_file" ]; then
@@ -61,6 +66,7 @@ year=$(python3 scripts/data/upload/process_csv.py "$folder" "$location" "$month"
 
 if [ $? -ne 0 ] || [ -z "$year" ]; then
     echo -e "${RED}CSV processing failed or no ModuleGaze rows matched this period.${NC}"
+    cleanup_processed_run_folder "$PROCESSED_ROOT" "$processed_run_name"
     sleep 2
     exec ./scripts/data/upload/main.sh
 fi
@@ -85,6 +91,7 @@ if [ -f "$processed_path" ]; then
 
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}ModuleGaze data upload completed successfully.${NC}"
+        cleanup_processed_run_folder "$PROCESSED_ROOT" "$processed_run_name"
     else
         echo -e "${RED}Upload failed. Please check your AWS setup.${NC}"
     fi

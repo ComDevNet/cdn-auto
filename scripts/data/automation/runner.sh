@@ -12,6 +12,7 @@ cd "$PROJECT_ROOT"
 source "$PROJECT_ROOT/scripts/data/lib/s3_helpers.sh"
 source "$PROJECT_ROOT/scripts/data/lib/kolibri_helpers.sh"
 source "$PROJECT_ROOT/scripts/data/lib/oc4d_assessment_helpers.sh"
+source "$PROJECT_ROOT/scripts/data/lib/cleanup_helpers.sh"
 
 CONFIG_FILE="$PROJECT_ROOT/config/automation.conf"
 
@@ -179,9 +180,11 @@ process_rachel_logs() {
     log "[rachel][warn] RACHEL processor failed. Continuing with other data stages."
     return 0
   fi
+  cleanup_raw_run_folder "$DATA_DIR" "$NEW_FOLDER"
 
   if [[ ! -s "$summary" ]]; then
     log "[info] No new data in summary.csv. Skipping RACHEL upload for this run."
+    cleanup_processed_run_folder "$PROCESSED_ROOT" "$NEW_FOLDER"
     return 0
   fi
 
@@ -208,6 +211,7 @@ process_rachel_logs() {
   else
     FINAL_CSV=""
     log "[info] No new entries matched the time period. Skipping RACHEL upload for this run."
+    cleanup_processed_run_folder "$PROCESSED_ROOT" "$NEW_FOLDER"
   fi
 }
 
@@ -217,6 +221,7 @@ ONLINE=0
 if has_internet; then
   ONLINE=1
   log "[online] Internet OK. Flushing queued uploads..."
+  export CDN_AUTO_PROCESSED_ROOT="$PROCESSED_ROOT"
   flush_all_queues "$QUEUE_DIR" || log "[warn] Some queued files could not be flushed; continuing with new exports."
 else
   log "[offline] No internet. New exports will be queued."
@@ -224,7 +229,9 @@ fi
 
 if [[ -n "$FINAL_CSV" ]]; then
   if (( ONLINE )); then
-    if ! upload_one "$FINAL_CSV" "RACHEL"; then
+    if upload_one "$FINAL_CSV" "RACHEL"; then
+      cleanup_processed_run_folder "$PROCESSED_ROOT" "$NEW_FOLDER"
+    else
       log "[warn] Upload failed; queueing new RACHEL file."
       queue_one "$FINAL_CSV" "$QUEUE_DIR" "RACHEL"
     fi
@@ -278,9 +285,11 @@ process_modulegaze_logs() {
     log "[modulegaze][warn] ModuleGaze processing failed. Skipping ModuleGaze upload for this run."
     return 0
   fi
+  cleanup_raw_run_folder "$DATA_DIR" "$modulegaze_folder"
 
   if [[ ! -s "$modulegaze_summary" ]]; then
     log "[modulegaze] No new data in summary.csv. Skipping ModuleGaze upload."
+    cleanup_processed_run_folder "$PROCESSED_ROOT" "$modulegaze_folder"
     return 0
   fi
 
@@ -295,12 +304,15 @@ process_modulegaze_logs() {
 
   if [[ -z "$modulegaze_final_csv" || ! -f "$modulegaze_final_csv" ]]; then
     log "[modulegaze] No entries matched the time period. Skipping ModuleGaze upload."
+    cleanup_processed_run_folder "$PROCESSED_ROOT" "$modulegaze_folder"
     return 0
   fi
 
   log "[modulegaze][upload] Prepared $(basename "$modulegaze_final_csv") ($(du -h "$modulegaze_final_csv" | cut -f1))"
   if (( ONLINE )); then
-    if ! upload_one "$modulegaze_final_csv" "ModuleGaze"; then
+    if upload_one "$modulegaze_final_csv" "ModuleGaze"; then
+      cleanup_processed_run_folder "$PROCESSED_ROOT" "$modulegaze_folder"
+    else
       log "[modulegaze][warn] Upload failed; queueing new ModuleGaze file."
       queue_one "$modulegaze_final_csv" "$QUEUE_DIR" "ModuleGaze"
     fi

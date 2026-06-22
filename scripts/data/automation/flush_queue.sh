@@ -35,6 +35,7 @@ load_config
 
 QUEUE_DIR="$PROJECT_ROOT/00_DATA/00_UPLOAD_QUEUE"
 prepare_queue_dirs "$QUEUE_DIR"
+export CDN_AUTO_PROCESSED_ROOT="$PROJECT_ROOT/00_DATA/00_PROCESSED"
 
 if ! compgen -G "$QUEUE_DIR/*.csv" >/dev/null \
   && ! compgen -G "$QUEUE_DIR/RACHEL/*.csv" >/dev/null \
