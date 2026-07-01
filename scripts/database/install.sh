@@ -11,15 +11,20 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
+# shellcheck source=../lib/permissions.sh
+source "$SCRIPT_DIR/../lib/permissions.sh"
 
 SERVICE_NAME="oc4d-db-backup"
 WRAPPER_SCRIPT="/usr/local/bin/run_oc4d_db_backup.sh"
 BACKUP_SCRIPT="$PROJECT_ROOT/scripts/database/backup.sh"
+BACKUP_OWNER="${SUDO_USER:-${OC4D_BACKUP_OWNER:-pi}}"
 
-ensure_backup_dir
-mkdir -p "$LOG_DIR"
-touch "$LOG_FILE"
-chmod 600 "$LOG_FILE" 2>/dev/null || true
+echo "Creating backup directories (owner: $BACKUP_OWNER)..."
+ensure_oc4d_backup_dirs "$BACKUP_OWNER"
+echo "  Backups: $OC4D_DB_BACKUP_DIR"
+echo "  Logs:    $LOG_DIR"
+
+chmod +x "$SCRIPT_DIR"/*.sh
 
 systemctl stop "$SERVICE_NAME.timer" 2>/dev/null || true
 systemctl disable "$SERVICE_NAME.timer" 2>/dev/null || true
