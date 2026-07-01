@@ -69,28 +69,10 @@ fi
 
 cd ../..
 
-# Set execute permissions for all scripts in the current directory
-sudo chmod +x *.sh
-sudo chmod +x scripts/vpn/*.sh
-sudo chmod +x scripts/update/*.sh
-sudo chmod +x scripts/system/*.sh
-sudo chmod +x scripts/system/networking/*.sh
-sudo chmod +x scripts/data/*.sh
-sudo chmod +x scripts/data/all/v1/*.sh
-sudo chmod +x scripts/data/all/v1/process/*.sh
-sudo chmod +x scripts/data/all/v2/*.sh
-sudo chmod +x scripts/data/all/v2/process/*.sh
-sudo chmod +x scripts/data/all/v3/*.sh
-sudo chmod +x scripts/data/all/v3/process/*.sh
-sudo chmod +x scripts/data/all/v4/*.sh
-sudo chmod +x scripts/data/all/v4/process/*.sh
-sudo chmod +x scripts/data/all/v5/*.sh
-sudo chmod +x scripts/data/all/v5/process/*.sh
-sudo chmod +x scripts/data/collection/*.sh
-sudo chmod +x scripts/data/process/*.sh
-sudo chmod +x scripts/data/upload/*.sh
-sudo chmod +x scripts/troubleshoot/*.sh
-sudo chmod +x scripts/data/automation/*.sh
+# shellcheck source=scripts/lib/permissions.sh
+source "$(pwd)/scripts/lib/permissions.sh"
+ensure_oc4d_backup_dirs "${USER:-pi}"
+chmod_cdn_auto_scripts "$(pwd)"
 
 # install python3 and pip3
 pip3 install -r requirements.txt --break-system-packages

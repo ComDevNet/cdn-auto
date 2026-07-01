@@ -21,8 +21,11 @@ log() {
 }
 
 ensure_backup_dir() {
-  mkdir -p "$OC4D_DB_BACKUP_DIR"
-  chmod 700 "$OC4D_DB_BACKUP_DIR" 2>/dev/null || true
+  local lib_dir
+  lib_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=../lib/permissions.sh
+  source "$lib_dir/../lib/permissions.sh"
+  ensure_oc4d_backup_dirs "${SUDO_USER:-${USER:-pi}}"
 }
 
 container_running() {
