@@ -33,11 +33,12 @@ echo -e "2. VPN           ${GRAY}-| Install and configure the Zero-tier VPN${NC}
 echo -e "3. Data          ${GRAY}-| Collect, Process and Upload logs${NC}"
 echo -e "4. System        ${GRAY}-| Change system settings${NC}"
 echo -e "5. Troubleshoot  ${GRAY}-| Find out what's wrong with your server${NC}"
-echo -e "${RED}6. Exit          ${GRAY}-| Exit CDN Auto${NC}"
+echo -e "6. Database      ${GRAY}-| Backup and restore the OC4D database${NC}"
+echo -e "${RED}7. Exit          ${GRAY}-| Exit CDN Auto${NC}"
 
 echo -e "${NC}"
 # Prompt the user for input
-read -p "Choose an option (1-6): " choice
+read -p "Choose an option (1-7): " choice
 
 # Check the user's choice and execute the corresponding script
 case $choice in
@@ -57,10 +58,13 @@ case $choice in
         ./scripts/troubleshoot/main.sh
         ;;
     6)
+        ./scripts/database/main.sh
+        ;;
+    7)
         ./exit.sh
         ;;
     *)
-        echo -e "${RED}Invalid choice. Please choose a number between 1 and 5.${NC}. Restarting..."
+        echo -e "${RED}Invalid choice. Please choose a number between 1 and 7.${NC}. Restarting..."
         sleep 3
         exec ./main.sh
         ;;
