@@ -108,7 +108,7 @@ restore_from_file() {
 
   log "Restoring from $(basename "$backup_file")..."
   if ! gunzip -c "$backup_file" | docker exec -i "$OC4D_DB_CONTAINER" \
-    psql -U "$OC4D_DB_USER" -d postgres -v ON_ERROR_STOP=1 >/dev/null; then
+    psql -U "$OC4D_DB_USER" -d "$OC4D_DB_NAME" -v ON_ERROR_STOP=1 >/dev/null; then
     log "ERROR: Restore failed. Pre-restore snapshot kept at $pre_restore"
     if (( stopped_web )); then
       systemctl start "$OC4D_WEB_SERVICE" || true
