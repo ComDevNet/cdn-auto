@@ -64,28 +64,6 @@ source "$SCRIPT_ROOT/scripts/lib/permissions.sh"
 
 ensure_oc4d_backup_dirs "${USER:-pi}"
 chmod_cdn_auto_scripts "$SCRIPT_ROOT"
-
-# ModuFetch Courses tab reads the OC4D catalog from DynamoDB.
-MODUFETCH_ENV="${HOME}/modufetch/apps/pi-server/.env"
-MODUFETCH_COURSES_TABLE="oc4d-courses-table"
-if [[ -f "$MODUFETCH_ENV" ]]; then
-  if grep -q '^DYNAMODB_COURSES_TABLE=' "$MODUFETCH_ENV"; then
-    sed -i "s/^DYNAMODB_COURSES_TABLE=.*/DYNAMODB_COURSES_TABLE=${MODUFETCH_COURSES_TABLE}/" "$MODUFETCH_ENV"
-  else
-    {
-      echo ""
-      echo "# OC4D course catalog in DynamoDB (ModuFetch Courses tab)"
-      echo "DYNAMODB_COURSES_TABLE=${MODUFETCH_COURSES_TABLE}"
-    } >> "$MODUFETCH_ENV"
-  fi
-  echo "Configured DYNAMODB_COURSES_TABLE=${MODUFETCH_COURSES_TABLE} in ${MODUFETCH_ENV}"
-  if systemctl list-unit-files modulefetch.service &>/dev/null \
-    && systemctl is-enabled modulefetch.service &>/dev/null; then
-    sudo systemctl restart modulefetch.service
-    echo "Restarted modulefetch.service"
-  fi
-else
-  echo "ModuFetch not found at ~/modufetch — skipping DYNAMODB_COURSES_TABLE setup."
-fi
+configure_modufetch_server "${USER:-pi}"
 
 exec ./main.sh
