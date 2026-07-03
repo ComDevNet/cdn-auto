@@ -13,9 +13,9 @@ fi
 ensure_backup_dir
 ensure_container
 
-stamp="$(date '+%Y%m%d_%H%M%S')"
-tmp_file="$OC4D_DB_BACKUP_DIR/.oc4d-${stamp}.sql.gz.tmp"
-final_file="$OC4D_DB_BACKUP_DIR/oc4d-${stamp}.sql.gz"
+base="$(backup_basename)"
+tmp_file="$OC4D_DB_BACKUP_DIR/.${base}.sql.gz.tmp"
+final_file="$OC4D_DB_BACKUP_DIR/${base}.sql.gz"
 
 log "Starting backup of database '$OC4D_DB_NAME' from container '$OC4D_DB_CONTAINER'"
 

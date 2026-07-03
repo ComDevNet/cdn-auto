@@ -28,7 +28,7 @@ if ((${#files[@]} == 0)); then
   echo "  (none yet)"
 else
   for file in "${files[@]}"; do
-    echo "  $(basename "$file")  $(du -h "$file" | awk '{print $1}')  $(date -r "$file" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || stat -c '%y' "$file" 2>/dev/null | cut -d. -f1)"
+    echo "  $(format_backup_label "$file")  $(du -h "$file" | awk '{print $1}')  $(basename "$file")"
   done
 fi
 

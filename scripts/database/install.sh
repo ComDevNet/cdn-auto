@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install systemd timer: OC4D DB backup every 6 hours, keep 3 copies.
+# Install systemd timer: OC4D DB backup every 6 hours, keep 10 copies.
 set -euo pipefail
 
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then

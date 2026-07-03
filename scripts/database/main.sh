@@ -26,7 +26,7 @@ NC='\033[0m'
 DARK_GRAY='\033[1;30m'
 GREEN='\033[0;32m'
 
-echo -e "1. Install auto backup ${DARK_GRAY}-| Every 6 hours, keep 3 backups${NC}"
+echo -e "1. Install auto backup ${DARK_GRAY}-| Every 6 hours, keep 10 backups${NC}"
 echo -e "2. Run backup now      ${DARK_GRAY}-| Create a backup immediately${NC}"
 echo -e "3. Restore database    ${DARK_GRAY}-| Recover from a saved backup${NC}"
 echo -e "4. Status              ${DARK_GRAY}-| Timer status and backup list${NC}"

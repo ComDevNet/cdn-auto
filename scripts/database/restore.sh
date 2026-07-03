@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/lib.sh"
 
 usage() {
   cat <<EOF
-Usage: sudo $0 [--file /path/to/oc4d-YYYYMMDD_HHMMSS.sql.gz] [--list]
+Usage: sudo $0 [--file /path/to/oc4d-backup-YYYY-MM-DD_HH-MM-SS.sql.gz] [--list]
 
   --list          List available backups and exit
   --file PATH     Restore the given backup without prompting
@@ -43,7 +43,7 @@ pick_backup_interactive() {
   if command -v whiptail >/dev/null 2>&1; then
     local options=() file label choice
     for file in "${files[@]}"; do
-      label="$(basename "$file") ($(du -h "$file" | awk '{print $1}'))"
+      label="$(format_backup_label "$file") ($(du -h "$file" | awk '{print $1}'))"
       options+=("$file" "$label")
     done
     choice="$(whiptail --title "Restore OC4D database" \
@@ -56,7 +56,7 @@ pick_backup_interactive() {
   local idx=1
   echo "Available backups:"
   for file in "${files[@]}"; do
-    echo "  $idx) $(basename "$file") ($(du -h "$file" | awk '{print $1}'))"
+    echo "  $idx) $(format_backup_label "$file") ($(du -h "$file" | awk '{print $1}'))"
     idx=$((idx + 1))
   done
   local choice
@@ -89,7 +89,7 @@ restore_from_file() {
 
   ensure_container
 
-  local pre_restore="$OC4D_DB_BACKUP_DIR/pre-restore-$(date '+%Y%m%d_%H%M%S').sql.gz"
+  local pre_restore="$OC4D_DB_BACKUP_DIR/pre-restore-$(backup_stamp).sql.gz"
   log "Creating pre-restore snapshot: $pre_restore"
   docker exec "$OC4D_DB_CONTAINER" pg_dump \
     -U "$OC4D_DB_USER" \
