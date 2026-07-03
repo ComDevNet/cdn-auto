@@ -16,6 +16,22 @@ Usage: sudo $0 [--file /path/to/oc4d-YYYYMMDD_HHMMSS.sql.gz] [--list]
 EOF
 }
 
+normalize_backup_file() {
+  local file="${1//$'\r'/}"
+  file="${file#"${file%%[![:space:]]*}"}"
+  file="${file%"${file##*[![:space:]]}"}"
+
+  if [[ -f "$file" ]]; then
+    printf '%s\n' "$file"
+    return 0
+  fi
+  if [[ "$file" != */* ]] && [[ -f "$OC4D_DB_BACKUP_DIR/$file" ]]; then
+    printf '%s\n' "$OC4D_DB_BACKUP_DIR/$file"
+    return 0
+  fi
+  printf '%s\n' "$file"
+}
+
 pick_backup_interactive() {
   local files=()
   mapfile -t files < <(list_backups)
@@ -25,15 +41,16 @@ pick_backup_interactive() {
   fi
 
   if command -v whiptail >/dev/null 2>&1; then
-    local options=() file label
+    local options=() file label choice
     for file in "${files[@]}"; do
       label="$(basename "$file") ($(du -h "$file" | awk '{print $1}'))"
       options+=("$file" "$label")
     done
-    whiptail --title "Restore OC4D database" \
+    choice="$(whiptail --title "Restore OC4D database" \
       --menu "Choose a backup to restore. This replaces the current database." 20 90 10 \
-      "${options[@]}"
-    return
+      "${options[@]}" 3>&1 1>&2 2>&3)" || return 1
+    normalize_backup_file "$choice"
+    return 0
   fi
 
   local idx=1
@@ -48,14 +65,14 @@ pick_backup_interactive() {
     echo "Invalid choice."
     exit 1
   fi
-  echo "${files[$((choice - 1))]}"
+  normalize_backup_file "${files[$((choice - 1))]}"
 }
 
 confirm_restore() {
   local backup_file="$1"
   local prompt="Restore $(basename "$backup_file")? This replaces the current '$OC4D_DB_NAME' database."
   if command -v whiptail >/dev/null 2>&1; then
-    whiptail --yesno "$prompt" 12 80
+    whiptail --yesno "$prompt" 12 80 3>&1 1>&2 2>&3
     return
   fi
   read -rp "$prompt [y/N]: " yn
@@ -143,6 +160,12 @@ if [[ -z "$backup_file" ]]; then
     echo "Restore cancelled."
     exit 0
   fi
+fi
+
+backup_file="$(normalize_backup_file "$backup_file")"
+if [[ -z "$backup_file" ]]; then
+  log "ERROR: No backup file selected."
+  exit 1
 fi
 
 confirm_restore "$backup_file" || { echo "Restore cancelled."; exit 0; }

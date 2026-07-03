@@ -48,7 +48,7 @@ case "$choice" in
     exec ./scripts/database/main.sh
     ;;
   3)
-    sudo ./scripts/database/restore.sh
+    sudo ./scripts/database/restore.sh </dev/tty >/dev/tty
     read -r -p "Press Enter to return to the menu..."
     exec ./scripts/database/main.sh
     ;;
