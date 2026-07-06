@@ -126,7 +126,7 @@ echo
 echo "QUEUE"
 mkdir -p "$QUEUE_DIR" 2>/dev/null
 echo "  Directory  : $QUEUE_DIR"
-for q_name in "." "RACHEL" "Kolibri" "ModuleGaze" "OC4DAssessments"; do
+for q_name in "." "RACHEL" "ModuleGaze" "OC4DAssessments"; do
   if [ "$q_name" = "." ]; then
     q_path="$QUEUE_DIR"
     label="legacy"

@@ -6,7 +6,6 @@ Main pieces
 
 - [upload.sh](./upload.sh) - pick a processed RACHEL run and send the final CSV to S3
 - [modulegaze.sh](./modulegaze.sh) - pick a processed ModuleGaze run and send the final CSV to S3 under `ModuleGaze/`
-- [kolibri.sh](./kolibri.sh) - export and upload Kolibri summary CSVs
 - [process_csv.py](./process_csv.py) - filter summary.csv for a month and produce a final upload CSV
 - [s3_bucket.sh](./s3_bucket.sh) - helper to pick/validate buckets
 

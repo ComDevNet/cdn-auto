@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runner with per-bucket region autodetect and Kolibri summary export support.
+# Runner with per-bucket region autodetect.
 set -euo pipefail
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -10,7 +10,6 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$PROJECT_ROOT"
 
 source "$PROJECT_ROOT/scripts/data/lib/s3_helpers.sh"
-source "$PROJECT_ROOT/scripts/data/lib/kolibri_helpers.sh"
 source "$PROJECT_ROOT/scripts/data/lib/oc4d_assessment_helpers.sh"
 
 CONFIG_FILE="$PROJECT_ROOT/config/automation.conf"
@@ -49,7 +48,6 @@ S3_SUBFOLDER="${S3_SUBFOLDER:-}"
 RACHEL_SUBFOLDER="${RACHEL_SUBFOLDER:-}"
 SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
-KOLIBRI_FACILITY_ID="${KOLIBRI_FACILITY_ID:-}"
 MODULEGAZE_ENABLED="${MODULEGAZE_ENABLED:-1}"
 MODULEGAZE_API_BASE_URL="${MODULEGAZE_API_BASE_URL:-http://127.0.0.1:3002}"
 MODULEGAZE_MODULE_MAP_FILE="${MODULEGAZE_MODULE_MAP_FILE:-$PROJECT_ROOT/config/oc4d/module-map.csv}"
@@ -74,8 +72,7 @@ OC4D_CLOUD_API_TOKEN="${OC4D_CLOUD_API_TOKEN:-}"
 DATA_DIR="$PROJECT_ROOT/00_DATA"
 PROCESSED_ROOT="$DATA_DIR/00_PROCESSED"
 QUEUE_DIR="$DATA_DIR/00_UPLOAD_QUEUE"
-KOLIBRI_EXPORT_DIR="$DATA_DIR/00_KOLIBRI_EXPORTS"
-mkdir -p "$DATA_DIR" "$PROCESSED_ROOT" "$QUEUE_DIR" "$KOLIBRI_EXPORT_DIR"
+mkdir -p "$DATA_DIR" "$PROCESSED_ROOT" "$QUEUE_DIR"
 prepare_queue_dirs "$QUEUE_DIR"
 
 TODAY_YMD="$(date '+%Y_%m_%d')"
@@ -493,44 +490,5 @@ PY
 }
 
 process_oc4d_assessments
-
-OVERALL_FAIL=0
-
-if kolibri_is_available; then
-  if ! WINDOW_EXPORTS="$(kolibri_schedule_window "$SCHEDULE_TYPE" "$DEVICE_LOCATION" "$RUN_INTERVAL")"; then
-    log "[error] Unable to resolve the Kolibri window for schedule '$SCHEDULE_TYPE'."
-    OVERALL_FAIL=1
-  else
-    eval "$WINDOW_EXPORTS"
-    KOLIBRI_FILE="$KOLIBRI_EXPORT_DIR/$WINDOW_FILENAME"
-
-    log "[kolibri] Schedule '$SCHEDULE_TYPE' uses window: $WINDOW_LABEL"
-
-    if kolibri_export_summary "$KOLIBRI_FILE" "$KOLIBRI_FACILITY_ID" "$WINDOW_START_DATE" "$WINDOW_END_DATE"; then
-      if ! kolibri_has_data_rows "$KOLIBRI_FILE"; then
-        log "[info] Kolibri summary contains only the header row; uploading it anyway to preserve the snapshot."
-      fi
-
-      if (( ONLINE )); then
-        if ! upload_one "$KOLIBRI_FILE" "Kolibri"; then
-          log "[warn] Kolibri upload failed; queueing the export."
-          queue_one "$KOLIBRI_FILE" "$QUEUE_DIR" "Kolibri"
-        fi
-      else
-        queue_one "$KOLIBRI_FILE" "$QUEUE_DIR" "Kolibri"
-      fi
-    else
-      log "[error] Kolibri summary export failed."
-      OVERALL_FAIL=1
-    fi
-  fi
-else
-  log "[info] Kolibri CLI not installed on this device. Skipping Kolibri summary export."
-fi
-
-if (( OVERALL_FAIL )); then
-  log "[warn] Run finished with Kolibri export errors."
-  exit 1
-fi
 
 log "[done] Run finished."

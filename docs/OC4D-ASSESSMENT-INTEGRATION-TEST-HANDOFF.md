@@ -19,7 +19,7 @@ The system should:
    `{parentOrg}/Assessments/{studentId}/{assessmentId}/{base}__{isoTs}.csv`
 
 5. Queue failed/offline uploads in `00_DATA/00_UPLOAD_QUEUE/OC4DAssessments/` with `.oc4dkey` sidecars
-6. Keep existing **RACHEL / Kolibri / ModuleGaze** pipelines unchanged
+6. Keep existing **RACHEL / ModuleGaze** pipelines unchanged
 
 Supporting identity work was also done in `oc4d-server` (username + login) and `oc4d` (student email/username in admin UI).
 
@@ -124,7 +124,7 @@ Rows starting with `#` in the first column are skipped. Empty mapping files caus
 
 ## 7. S3 upload contract
 
-**Bucket:** `OC4D_BUCKET` (separate from main `S3_BUCKET` used by RACHEL/Kolibri/ModuleGaze)
+**Bucket:** `OC4D_BUCKET` (separate from main `S3_BUCKET` used by RACHEL/ModuleGaze)
 
 **Key pattern (strict):**
 
@@ -207,7 +207,7 @@ Next online run: flush_all_queues → flush_oc4d_queue
 
 ## 10. Queue mechanism (OC4D-specific)
 
-Unlike RACHEL/Kolibri/ModuleGaze (folder + basename), OC4D uses **full prebuilt S3 keys**.
+Unlike RACHEL/ModuleGaze (folder + basename), OC4D uses **full prebuilt S3 keys**.
 
 | Queue path | Contents |
 |------------|----------|
@@ -327,7 +327,7 @@ Create a fixture JSON matching API response with 1 result, 2 questions, mapped s
 - [ ] `uploaded-state.json` contains result ID after successful upload
 - [ ] Simulate offline (block S3 or disconnect network): file queued with `.oc4dkey` sidecar
 - [ ] Restore network + `flush_queue.sh`: queued file uploaded and removed from queue
-- [ ] Full `runner.sh` run: RACHEL/Kolibri/ModuleGaze still work; assessment stage logs `[oc4d][report] uploaded=...`
+- [ ] Full `runner.sh` run: RACHEL/ModuleGaze still work; assessment stage logs `[oc4d][report] uploaded=...`
 
 ### D. S3 acceptance (cloud OC4D ingestion)
 
@@ -406,7 +406,7 @@ npm run db:generate
 | Key missing required segments | `assessment.py` + `validate_oc4d_assessment_key` in bash |
 | No questions for assessment | `assessment.py` |
 
-Failures are recorded in `manifest.json` under `failed` with `reason` text. The runner logs `[oc4d][report] uploaded=... skipped=... failed=...` and does **not** fail the overall RACHEL/Kolibri run.
+Failures are recorded in `manifest.json` under `failed` with `reason` text. The runner logs `[oc4d][report] uploaded=... skipped=... failed=...` and does **not** fail the overall RACHEL run.
 
 ---
 
@@ -469,7 +469,7 @@ From the plan + spec notes:
 - [ ] `findAssessmentForResult` matches by `assessmentId` (not fuzzy fallback)
 - [ ] `gradeAssessmentAnswers` renders percentages/trends per student consistently
 - [ ] Offline queue flush works on next online run
-- [ ] RACHEL/Kolibri/ModuleGaze behavior unchanged
+- [ ] RACHEL/ModuleGaze behavior unchanged
 
 ---
 

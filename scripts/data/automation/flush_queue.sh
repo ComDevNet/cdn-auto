@@ -1,5 +1,5 @@
 #!/bin/bash
-# Flush queued CSV uploads for RACHEL, Kolibri, and ModuleGaze destinations.
+# Flush queued CSV uploads for RACHEL, ModuleGaze, and OC4D assessment destinations.
 set -euo pipefail
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -39,7 +39,6 @@ export CDN_AUTO_PROCESSED_ROOT="$PROJECT_ROOT/00_DATA/00_PROCESSED"
 
 if ! compgen -G "$QUEUE_DIR/*.csv" >/dev/null \
   && ! compgen -G "$QUEUE_DIR/RACHEL/*.csv" >/dev/null \
-  && ! compgen -G "$QUEUE_DIR/Kolibri/*.csv" >/dev/null \
   && ! compgen -G "$QUEUE_DIR/ModuleGaze/*.csv" >/dev/null \
   && ! compgen -G "$QUEUE_DIR/OC4DAssessments/*.csv" >/dev/null; then
   log "Queue empty at $QUEUE_DIR"

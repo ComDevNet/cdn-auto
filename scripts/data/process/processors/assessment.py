@@ -375,7 +375,7 @@ def load_cloud_student_prefix_ids(
         return {}
 
     ids: set[str] = set()
-    for folder in ("Assessments", "StudentReports", "RACHEL", "Kolibri"):
+    for folder in ("Assessments", "StudentReports", "RACHEL"):
         try:
             ids.update(list_s3_common_prefixes(bucket_uri, f"{parent_org}/{folder}/"))
         except FileNotFoundError:

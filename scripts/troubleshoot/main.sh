@@ -26,15 +26,14 @@ GREEN='\033[0;32m'
 
 # Display menu options
 echo -e "1. OC4D           ${DARK_GRAY}-| Check oc4d status${NC}"
-echo -e "2. Kolibri         ${DARK_GRAY}-| Check kolibri status${NC}"
-echo -e "3. Storage        ${DARK_GRAY}-| Check storage${NC}"
-echo -e "4. Wifi           ${DARK_GRAY}-| Check hostapd${NC}"
-echo -e "${GREEN}5. Go Back        ${DARK_GRAY}-| Go back to the main menu${NC}"
-echo -e "${RED}6. Exit           ${DARK_GRAY}-| Exit the program${NC}"
+echo -e "2. Storage        ${DARK_GRAY}-| Check storage${NC}"
+echo -e "3. Wifi           ${DARK_GRAY}-| Check hostapd${NC}"
+echo -e "${GREEN}4. Go Back        ${DARK_GRAY}-| Go back to the main menu${NC}"
+echo -e "${RED}5. Exit           ${DARK_GRAY}-| Exit the program${NC}"
 
 echo -e "${NC}"
 # Prompt the user for input
-read -p "Choose an option (1-6): " choice
+read -p "Choose an option (1-5): " choice
 
 # Check the user's choice and execute the corresponding script
 case $choice in
@@ -42,23 +41,20 @@ case $choice in
         ./scripts/troubleshoot/oc4d.sh
         ;;
     2)
-        ./scripts/troubleshoot/kolibri.sh
-        ;;
-    3)
         ./scripts/troubleshoot/storage.sh
         ;;
-    4) 
+    3)
         ./scripts/troubleshoot/wifi.sh
         ;;
-    5)
+    4)
         ./main.sh
         ;;
-    6)
+    5)
         ./exit.sh
         ;;
     *)
-        echo "Invalid choice. Please choose a number between 1 and 6."
+        echo "Invalid choice. Please choose a number between 1 and 5."
         sleep 1.5
-        exec ./scripts/vpn/main.sh
+        exec ./scripts/troubleshoot/main.sh
         ;;
 esac

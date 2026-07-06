@@ -89,7 +89,7 @@ queue_dir_for_folder() {
 
 prepare_queue_dirs() {
   local queue_root="${1:?queue root required}"
-  mkdir -p "$queue_root" "$queue_root/RACHEL" "$queue_root/Kolibri" "$queue_root/ModuleGaze" "$queue_root/OC4DAssessments"
+  mkdir -p "$queue_root" "$queue_root/RACHEL" "$queue_root/ModuleGaze" "$queue_root/OC4DAssessments"
 }
 
 queue_one() {
@@ -150,7 +150,6 @@ flush_all_queues() {
   # Backward compatibility for old queue files that were stored at the queue root.
   flush_queue_dir "$queue_root" "RACHEL" || failed=1
   flush_queue_dir "$queue_root/RACHEL" "RACHEL" || failed=1
-  flush_queue_dir "$queue_root/Kolibri" "Kolibri" || failed=1
   flush_queue_dir "$queue_root/ModuleGaze" "ModuleGaze" || failed=1
 
   helpers_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"

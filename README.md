@@ -61,7 +61,7 @@ See the complete guide: scripts/data/automation/README.md
 - [scripts/data/upload/README.md](scripts/data/upload/README.md) — Manual upload flow and CSV month filtering
 - [scripts/data/automation/README.md](scripts/data/automation/README.md) — Automation with systemd (install, configure, run, troubleshoot)
 - [scripts/system/README.md](scripts/system/README.md) — System operations (networking, modem, Wi‑Fi, Raspberry Pi config)
-- [scripts/troubleshoot/README.md](scripts/troubleshoot/README.md) — Diagnostic tools (Kolibri, OC4D, storage, Wi‑Fi)
+- [scripts/troubleshoot/README.md](scripts/troubleshoot/README.md) — Diagnostic tools (OC4D, storage, Wi‑Fi)
 - [scripts/update/README.md](scripts/update/README.md) — Update helpers (OS and tool)
 - [scripts/vpn/README.md](scripts/vpn/README.md) — VPN connect/disconnect/status
 - [config/README.md](config/README.md) — automation.conf settings, ownership, permissions

@@ -105,17 +105,11 @@ echo data > "$PROCESSED_ROOT/site_logs_2025_06_27/site_daily_access_logs.csv"
 queue_one "$PROCESSED_ROOT/site_logs_2025_06_27/site_daily_access_logs.csv" "$QUEUE_DIR" "RACHEL" "site_logs_2025_06_27"
 assert_eq "$(read_queue_run_sidecar "$QUEUE_DIR/RACHEL/site_daily_access_logs.csv")" "site_logs_2025_06_27" "queue_one sidecar"
 
-log "=== Route 8: Kolibri queue does not write sidecar ==="
-mkdir -p "$QUEUE_DIR/Kolibri"
-echo k > "$TEST_ROOT/kolibri.csv"
-queue_one "$TEST_ROOT/kolibri.csv" "$QUEUE_DIR" "Kolibri" "ignored_run"
-if [[ -f "$QUEUE_DIR/Kolibri/kolibri.csv.cdnrun" ]]; then
-  log "FAIL: Kolibri queue should not create sidecar"
-  fail=$((fail + 1))
-else
-  log "PASS: Kolibri queue has no sidecar"
-  pass=$((pass + 1))
-fi
+log "=== Route 8: queue_one writes sidecar for ModuleGaze ==="
+mkdir -p "$PROCESSED_ROOT/site_modulegaze_logs_2025_06_28"
+echo data > "$PROCESSED_ROOT/site_modulegaze_logs_2025_06_28/site_daily_modulegaze_logs.csv"
+queue_one "$PROCESSED_ROOT/site_modulegaze_logs_2025_06_28/site_daily_modulegaze_logs.csv" "$QUEUE_DIR" "ModuleGaze" "site_modulegaze_logs_2025_06_28"
+assert_eq "$(read_queue_run_sidecar "$QUEUE_DIR/ModuleGaze/site_daily_modulegaze_logs.csv")" "site_modulegaze_logs_2025_06_28" "modulegaze queue_one sidecar"
 
 log "=== Route 9: missing processed folder is a no-op ==="
 cleanup_processed_run_folder "$PROCESSED_ROOT" "site_logs_2099_01_01"

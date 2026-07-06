@@ -2,7 +2,6 @@
 
 Tools for diagnosing common issues.
 
-- [kolibri.sh](./kolibri.sh) — Kolibri service checks
 - [oc4d.sh](./oc4d.sh) — OC4D service checks
 - [storage.sh](./storage.sh) — storage space utility
 - [wifi.sh](./wifi.sh) — Wi‑Fi diagnostics
