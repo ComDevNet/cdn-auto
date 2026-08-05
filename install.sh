@@ -50,7 +50,8 @@ fi
 mkdir -p ~/bin
 
 # Create a symbolic link to your script
-ln -s ~/cdn-auto/main.sh ~/bin/cdn-auto
+ln -sfn ~/cdn-auto/main.sh ~/bin/cdn-auto
+sudo ln -sfn /home/pi/cdn-auto/main.sh /usr/local/bin/cdn-auto
 
 # Add the 'bin' directory to PATH in ~/.bashrc
 echo 'export PATH=$PATH:~/bin' >> ~/.bashrc
