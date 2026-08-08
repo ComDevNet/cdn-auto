@@ -8,12 +8,14 @@ Main pieces
 - [modulegaze.sh](./modulegaze.sh) - pick a processed ModuleGaze run and send the final CSV to S3 under `ModuleGaze/`
 - [process_csv.py](./process_csv.py) - filter summary.csv for a month and produce a final upload CSV
 - [s3_bucket.sh](./s3_bucket.sh) - helper to pick/validate buckets
+- Flush Upload Queue (menu option) - uploads everything in `00_DATA/00_UPLOAD_QUEUE/` using `config/automation.conf` via [../automation/flush_queue.sh](../automation/flush_queue.sh)
 
 Usage
 
 - Menu: [main.sh](./main.sh)
 - Direct RACHEL upload: [upload.sh](./upload.sh)
 - Direct ModuleGaze upload: [modulegaze.sh](./modulegaze.sh)
+- Flush queued uploads: [../automation/flush_queue.sh](../automation/flush_queue.sh)
 
 Inner workings
 

@@ -33,12 +33,13 @@ GREEN='\033[0;32m'
 echo -e "1. Install Automation   ${DARK_GRAY}-| Set up the systemd service and timer${NC}"
 echo -e "2. Check Status         ${DARK_GRAY}-| Check the status of the automation service${NC}"
 echo -e "3. Configure            ${DARK_GRAY}-| Configure automation parameters${NC}"
-echo -e "${GREEN}4. Go Back              ${DARK_GRAY}-| Go back to the data menu${NC}"
-echo -e "${RED}5. Exit                 ${DARK_GRAY}-| Exit the program${NC}"
+echo -e "4. Flush Upload Queue   ${DARK_GRAY}-| Upload all queued files using automation config${NC}"
+echo -e "${GREEN}5. Go Back              ${DARK_GRAY}-| Go back to the data menu${NC}"
+echo -e "${RED}6. Exit                 ${DARK_GRAY}-| Exit the program${NC}"
 echo ""
 
 # Prompt the user for input
-read -r -p "Choose an option (1-5): " choice
+read -r -p "Choose an option (1-6): " choice
 
 # Execute corresponding action based on user choice
 case $choice in
@@ -60,13 +61,18 @@ case $choice in
         exec ./scripts/data/automation/main.sh
         ;;
     4)
-        exec ./scripts/data/main.sh
+        ./scripts/data/automation/flush_queue.sh
+        read -r -p "Flush finished. Press Enter to return to the menu..."
+        exec ./scripts/data/automation/main.sh
         ;;
     5)
+        exec ./scripts/data/main.sh
+        ;;
+    6)
         ./exit.sh
         ;;
     *)
-        echo -e "${RED}Invalid choice. Please choose a number between 1 and 5.${NC}"
+        echo -e "${RED}Invalid choice. Please choose a number between 1 and 6.${NC}"
         sleep 1.5
         exec ./scripts/data/automation/main.sh
         ;;

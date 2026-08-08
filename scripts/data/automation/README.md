@@ -19,12 +19,12 @@ Key features
 
 Components
 
-- `main.sh` - menu entrypoint for Install, Status, Configure
+- `main.sh` - menu entrypoint for Install, Status, Configure, and Flush Upload Queue
 - `install.sh` - creates the service/timer and the wrapper at `/usr/local/bin/run_v5_log_processor.sh`
 - `configure.sh` - writes `config/automation.conf`, discovers buckets/subfolders, validates with a live test upload, and sets the schedule
 - `runner.sh` - orchestrates the pipeline, flushes queued uploads, and exports/uploads RACHEL, ModuleGaze, and OC4D assessment data
 - `status.sh` - health/status report: timer/service, queue contents, connectivity, AWS identity, last logs
-- `flush_queue.sh` - uploads queued CSVs for `RACHEL/`, `ModuleGaze/`, and `OC4DAssessments/`
+- `flush_queue.sh` - uploads queued CSVs for `RACHEL/`, `ModuleGaze/`, and `OC4DAssessments/` using `config/automation.conf` (no prompts)
 - `filter_time_based.py` - builds final CSVs for scheduled windows
 - `scripts/data/lib/s3_helpers.sh` - shared bucket, upload, and queue helpers
 - `scripts/data/lib/cleanup_helpers.sh` - safe removal of raw and processed RACHEL/ModuleGaze run folders
@@ -116,6 +116,7 @@ Commands
 - Install: `sudo ./scripts/data/automation/install.sh`
 - Configure: `sudo ./scripts/data/automation/configure.sh`
 - Status: `./scripts/data/automation/status.sh`
+- Flush upload queue: `./scripts/data/automation/flush_queue.sh` (also via Automation or Upload menu → Flush Upload Queue)
 - Manual run (wrapper): `sudo /usr/local/bin/run_v5_log_processor.sh`
 - Manual ModuleGaze upload: `./scripts/data/upload/modulegaze.sh`
 - Manual OC4D assessment pull/upload: `./scripts/data/upload/oc4d_assessments.sh`
