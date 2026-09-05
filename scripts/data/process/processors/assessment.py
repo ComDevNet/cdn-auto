@@ -748,7 +748,11 @@ def resolve_api_token(api_base: str, token: str) -> str:
 
 def fetch_api_payload(api_base: str, token: str, take: int) -> dict[str, Any]:
     api_base = api_base.rstrip("/")
-    url = f"{api_base}/api/assessment-results?scope=all&take={take}"
+    start_date = (os.environ.get("OC4D_API_START_DATE") or "2020-01-01").strip() or "2020-01-01"
+    url = (
+        f"{api_base}/api/assessment-results?scope=all&take={take}"
+        f"&startDate={urllib.parse.quote(start_date)}"
+    )
 
     def fetch_with_access_token(access_token: str) -> str:
         headers = {

@@ -8,6 +8,7 @@ log() { echo "[$(ts)] $*"; }
 PROJECT_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../../.." >/dev/null 2>&1 && pwd)"
 CONFIG_FILE="$PROJECT_ROOT/config/automation.conf"
 
+find "$PROJECT_ROOT/scripts" -name '*.sh' -exec sed -i 's/\r$//' {} + 2>/dev/null || true
 source "$PROJECT_ROOT/scripts/data/lib/s3_helpers.sh"
 
 load_config() {
@@ -40,7 +41,8 @@ export CDN_AUTO_PROCESSED_ROOT="$PROJECT_ROOT/00_DATA/00_PROCESSED"
 if ! compgen -G "$QUEUE_DIR/*.csv" >/dev/null \
   && ! compgen -G "$QUEUE_DIR/RACHEL/*.csv" >/dev/null \
   && ! compgen -G "$QUEUE_DIR/ModuleGaze/*.csv" >/dev/null \
-  && ! compgen -G "$QUEUE_DIR/OC4DAssessments/*.csv" >/dev/null; then
+  && ! compgen -G "$QUEUE_DIR/OC4DAssessments/*.csv" >/dev/null \
+  && ! compgen -G "$QUEUE_DIR/OC4DAssessments/*.json" >/dev/null; then
   log "Queue empty at $QUEUE_DIR"
   exit 0
 fi

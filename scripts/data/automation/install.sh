@@ -87,6 +87,9 @@ echo "--- V5 Log Processor Automation triggered at \$(date) ---"
 # Change to the project directory
 cd "$PROJECT_ROOT"
 
+# Convert Windows CRLF so sourced helpers cannot abort the runner.
+find "$PROJECT_ROOT/scripts" -name '*.sh' -exec sed -i 's/\r\$//' {} + 2>/dev/null || true
+
 # Execute the main data processing script (all.sh runs collect, process, upload)
 # All output (stdout and stderr) is appended to the log file
 ./scripts/data/automation/runner.sh >> "$LOG_FILE" 2>&1

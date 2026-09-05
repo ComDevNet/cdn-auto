@@ -168,31 +168,32 @@ queue_oc4d_one() {
 
 flush_oc4d_queue() {
   local queue_root="${1:?queue root required}"
-  local queue_dir failed=0 csv sidecar s3_key files=()
+  local queue_dir failed=0 file sidecar s3_key files=()
 
   queue_dir="$(oc4d_queue_dir "$queue_root")"
   [[ -d "$queue_dir" ]] || return 0
 
   shopt -s nullglob
-  files=("$queue_dir"/*.csv)
+  # Marking schemes may be queued as .csv or .json with a matching .oc4dkey sidecar.
+  files=("$queue_dir"/*.csv "$queue_dir"/*.json)
   shopt -u nullglob
 
   if (( ${#files[@]} == 0 )); then
     return 0
   fi
 
-  for csv in "${files[@]}"; do
-    sidecar="$(oc4d_sidecar_for_csv "$csv")"
+  for file in "${files[@]}"; do
+    sidecar="$(oc4d_sidecar_for_csv "$file")"
     if [[ ! -f "$sidecar" ]]; then
-      log "[oc4d][warn] Missing sidecar for queued file $(basename "$csv"); leaving in queue."
+      log "[oc4d][warn] Missing sidecar for queued file $(basename "$file"); leaving in queue."
       failed=1
       continue
     fi
     s3_key="$(tr -d '\r' < "$sidecar" | head -n1)"
-    if upload_oc4d_one "$csv" "$s3_key"; then
-      rm -f "$csv" "$sidecar"
+    if upload_oc4d_one "$file" "$s3_key"; then
+      rm -f "$file" "$sidecar"
     else
-      log "[oc4d] Leaving queued: $(basename "$csv")"
+      log "[oc4d] Leaving queued: $(basename "$file")"
       failed=1
     fi
   done
@@ -246,11 +247,12 @@ fetch_oc4d_assessment_payload() {
   local api_base="${OC4D_API_BASE_URL:-http://127.0.0.1:3000}"
   local token=""
   local take="${OC4D_API_TAKE:-2000}"
+  local start_date="${OC4D_API_START_DATE:-2020-01-01}"
   local out_file="$1"
   local url auth_header=()
 
   api_base="${api_base%/}"
-  url="${api_base}/api/assessment-results?scope=all&take=${take}"
+  url="${api_base}/api/assessment-results?scope=all&take=${take}&startDate=${start_date}"
 
   if ! command -v curl >/dev/null 2>&1; then
     echo "curl is required to fetch OC4D assessment results" >&2

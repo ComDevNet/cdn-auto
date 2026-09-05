@@ -6,6 +6,7 @@ set -euo pipefail
 CONFIG_FILE="config/automation.conf"
 PROJECT_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../../.." >/dev/null 2>&1 && pwd)"
 cd "$PROJECT_ROOT"
+find "$PROJECT_ROOT/scripts" -name '*.sh' -exec sed -i 's/\r$//' {} + 2>/dev/null || true
 
 RED='\033[0;31m'
 NC='\033[0m'

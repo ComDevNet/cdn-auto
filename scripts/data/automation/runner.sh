@@ -9,6 +9,9 @@ SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# Windows edits leave CRLF; bash then dies on $'\r' while sourcing helpers.
+find "$PROJECT_ROOT/scripts" -name '*.sh' -exec sed -i 's/\r$//' {} + 2>/dev/null || true
+
 source "$PROJECT_ROOT/scripts/data/lib/s3_helpers.sh"
 source "$PROJECT_ROOT/scripts/data/lib/oc4d_assessment_helpers.sh"
 

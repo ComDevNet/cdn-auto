@@ -23,6 +23,7 @@ mkdir -p "$LOG_DIR"
 touch "$LOG_FILE" || true
 
 cd "$PROJECT_ROOT"
+find "$PROJECT_ROOT/scripts" -name '*.sh' -exec sed -i 's/\r$//' {} + 2>/dev/null || true
 echo "--- V5 Log Processor Automation triggered at $(date) ---" | tee -a "$LOG_FILE"
 # Run runner and tee output to both journal and file; capture runner's exit code via PIPESTATUS.
 set +e
