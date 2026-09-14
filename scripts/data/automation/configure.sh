@@ -8,8 +8,9 @@ CONFIG_DIR="$PROJECT_ROOT/config"
 CONFIG_FILE="$CONFIG_DIR/automation.conf"
 mkdir -p "$CONFIG_DIR"
 
-SERVICE_UNIT="/etc/systemd/system/v5-log-processor.service"
+SERVICE_UNIT="/etc/systemd/system/v5-log-harvester.service"
 SERVICE_USER="$(awk -F= '/^User=/{print $2}' "$SERVICE_UNIT" 2>/dev/null | tail -n1)"
+[ -z "${SERVICE_USER:-}" ] && SERVICE_USER="$(awk -F= '/^User=/{print $2}' /etc/systemd/system/v5-log-processor.service 2>/dev/null | tail -n1)"
 [ -z "${SERVICE_USER:-}" ] && SERVICE_USER="${SUDO_USER:-pi}"
 SERVICE_GROUP="$SERVICE_USER"
 
@@ -220,6 +221,8 @@ S3_SUBFOLDER="${S3_SUBFOLDER:-}"
 RACHEL_SUBFOLDER="${RACHEL_SUBFOLDER:-}"
 SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
+HARVEST_INTERVAL="${HARVEST_INTERVAL:-3600}"
+UPLOAD_WINDOW="${UPLOAD_WINDOW:-}"
 MODULEGAZE_ENABLED="${MODULEGAZE_ENABLED:-1}"
 MODULEGAZE_API_BASE_URL="${MODULEGAZE_API_BASE_URL:-http://127.0.0.1:3002}"
 MODULEGAZE_MODULE_MAP_FILE="${MODULEGAZE_MODULE_MAP_FILE:-$PROJECT_ROOT/config/oc4d/module-map.csv}"
@@ -340,19 +343,19 @@ pick_rachel_subfolder() {
 pick_rachel_subfolder
 RACHEL_SUBFOLDER="$(sanitize_subfolder "$RACHEL_SUBFOLDER")"
 
-# --- Dynamic Schedule Menu ---
+# --- Data filter window (what rows go into each CSV) ---
 sched_opts=(
-  daily   "Once per day"
-  weekly  "Once per week"
-  monthly "Once per month"
-  yearly  "Once per year"
-  custom  "Custom interval (seconds)"
+  daily   "Prior calendar day"
+  weekly  "Prior calendar week"
+  monthly "Prior calendar month"
+  yearly  "Prior calendar year"
+  custom  "Custom lookback (seconds)"
 )
 # If castle is selected, add hourly to the beginning of the options
 if [[ "$PYTHON_SCRIPT" == "cape_coast_d" ]]; then
-  sched_opts=( hourly "Every hour" "${sched_opts[@]}" )
+  sched_opts=( hourly "Prior hour" "${sched_opts[@]}" )
 fi
-sched=$(menu_select "Choose schedule" 15 74 7 "${sched_opts[@]}")
+sched=$(menu_select "Choose data filter window (SCHEDULE_TYPE)" 15 74 7 "${sched_opts[@]}")
 
 case "$sched" in
   hourly)  SCHEDULE_TYPE="hourly";  RUN_INTERVAL="3600" ;;
@@ -363,6 +366,40 @@ case "$sched" in
   custom)  SCHEDULE_TYPE="custom"; while :; do prompt_text "Custom interval in seconds (>=300)" "${RUN_INTERVAL}" RUN_INTERVAL; [[ "$RUN_INTERVAL" =~ ^[0-9]+$ ]] && (( RUN_INTERVAL >= 300 )) && break || say "Enter a number >= 300."; done ;;
 esac
 
+# --- Harvest interval (how often to collect while device is on) ---
+while :; do
+  prompt_text "Harvest interval seconds (default 3600 = hourly)" "${HARVEST_INTERVAL}" HARVEST_INTERVAL
+  [[ "$HARVEST_INTERVAL" =~ ^[0-9]+$ ]] && (( HARVEST_INTERVAL >= 300 )) && break || say "Enter a number >= 300."
+done
+
+# --- Upload window (when dispatcher may send to S3) ---
+if [[ -z "$UPLOAD_WINDOW" ]]; then
+  if [[ "$SCHEDULE_TYPE" == "daily" ]]; then
+    UPLOAD_WINDOW="00:00-01:00"
+  else
+    UPLOAD_WINDOW="always"
+  fi
+fi
+upload_sel=$(menu_select "Choose upload window" 14 74 6 \
+  daily_midnight "Daily 00:00-01:00 (default for daily filter)" \
+  offpeak "Off-peak 22:00-06:00" \
+  always "Always (whenever dispatcher runs + online)" \
+  custom "Custom HH:MM-HH:MM range" \
+)
+case "$upload_sel" in
+  daily_midnight) UPLOAD_WINDOW="00:00-01:00" ;;
+  offpeak) UPLOAD_WINDOW="22:00-06:00" ;;
+  always) UPLOAD_WINDOW="always" ;;
+  custom)
+    while :; do
+      prompt_text "Upload window HH:MM-HH:MM (or always)" "${UPLOAD_WINDOW}" UPLOAD_WINDOW
+      [[ "$UPLOAD_WINDOW" == "always" ]] && break
+      [[ "$UPLOAD_WINDOW" =~ ^[0-2][0-9]:[0-5][0-9]-[0-2][0-9]:[0-5][0-9]$ ]] && break
+      say "Use always or HH:MM-HH:MM"
+    done
+    ;;
+esac
+
 summary=$(cat <<EOF
 Service user   : $SERVICE_USER
 Server version : $SERVER_VERSION
@@ -371,7 +408,9 @@ Device location: $DEVICE_LOCATION
 S3 bucket      : $S3_BUCKET
 S3 subfolder   : ${S3_SUBFOLDER:-<root>}
 RACHEL subfolder: ${RACHEL_SUBFOLDER:-<RACHEL root>}
-Schedule       : $SCHEDULE_TYPE (interval=${RUN_INTERVAL}s)
+Filter window  : $SCHEDULE_TYPE (lookback=${RUN_INTERVAL}s)
+Harvest every  : ${HARVEST_INTERVAL}s
+Upload window  : $UPLOAD_WINDOW
 ModuleGaze     : $([[ "$MODULEGAZE_ENABLED" == "1" ]] && echo enabled || echo disabled)
 ModuleGaze API : ${MODULEGAZE_API_BASE_URL:-http://127.0.0.1:3002}
 OC4D assessments: $([[ "$OC4D_ASSESSMENTS_ENABLED" == "1" ]] && echo enabled || echo disabled)
@@ -396,6 +435,8 @@ S3_SUBFOLDER="$S3_SUBFOLDER"
 RACHEL_SUBFOLDER="$RACHEL_SUBFOLDER"
 SCHEDULE_TYPE="$SCHEDULE_TYPE"
 RUN_INTERVAL="$RUN_INTERVAL"
+HARVEST_INTERVAL="$HARVEST_INTERVAL"
+UPLOAD_WINDOW="$UPLOAD_WINDOW"
 MODULEGAZE_ENABLED="$MODULEGAZE_ENABLED"
 MODULEGAZE_API_BASE_URL="$MODULEGAZE_API_BASE_URL"
 MODULEGAZE_MODULE_MAP_FILE="$MODULEGAZE_MODULE_MAP_FILE"
@@ -472,28 +513,50 @@ until test_upload; do
   attempt=$((attempt+1))
 done
 
-# Timer override
-SERVICE="v5-log-processor.service"
-TIMER="v5-log-processor.timer"
-DROP_DIR="/etc/systemd/system/${TIMER}.d"
-OVERRIDE="${DROP_DIR}/override.conf"
-sudo mkdir -p "$DROP_DIR"
-{
-  echo "[Timer]"
-  echo "OnCalendar="
-  echo "OnUnitActiveSec="
-  case "$SCHEDULE_TYPE" in
-    hourly)  echo "OnCalendar=hourly"  ;;
-    daily)   echo "OnCalendar=daily"   ;;
-    weekly)  echo "OnCalendar=weekly"  ;;
-    monthly) echo "OnCalendar=monthly" ;;
-    yearly)  echo "OnCalendar=yearly"  ;;
-    custom)  echo "OnUnitActiveSec=${RUN_INTERVAL}" ;;
-  esac
-  echo "Persistent=true"
-} | sudo tee "$OVERRIDE" >/dev/null
-sudo systemctl daemon-reload
-sudo systemctl enable "$TIMER" >/dev/null
-sudo systemctl restart "$TIMER"
-say "⏱  Timer updated and started: $TIMER"
+# Timer overrides: harvester uses HARVEST_INTERVAL; dispatcher checks hourly (window gates uploads).
+HARVEST_TIMER="v5-log-harvester.timer"
+DISPATCH_TIMER="v5-log-dispatcher.timer"
+LEGACY_TIMER="v5-log-processor.timer"
+
+# Disable legacy combined timer if still present
+if systemctl list-unit-files "$LEGACY_TIMER" >/dev/null 2>&1; then
+  sudo systemctl stop "$LEGACY_TIMER" 2>/dev/null || true
+  sudo systemctl disable "$LEGACY_TIMER" 2>/dev/null || true
+fi
+
+if systemctl list-unit-files "$HARVEST_TIMER" >/dev/null 2>&1; then
+  DROP_DIR="/etc/systemd/system/${HARVEST_TIMER}.d"
+  sudo mkdir -p "$DROP_DIR"
+  {
+    echo "[Timer]"
+    echo "OnCalendar="
+    echo "OnUnitActiveSec="
+    echo "OnUnitActiveSec=${HARVEST_INTERVAL}"
+    echo "Persistent=true"
+  } | sudo tee "$DROP_DIR/override.conf" >/dev/null
+  sudo systemctl daemon-reload
+  sudo systemctl enable "$HARVEST_TIMER" >/dev/null
+  sudo systemctl restart "$HARVEST_TIMER"
+  say "⏱  Harvester timer: every ${HARVEST_INTERVAL}s ($HARVEST_TIMER)"
+else
+  say "⚠️  $HARVEST_TIMER not installed; run Install Automation first."
+fi
+
+if systemctl list-unit-files "$DISPATCH_TIMER" >/dev/null 2>&1; then
+  DROP_DIR="/etc/systemd/system/${DISPATCH_TIMER}.d"
+  sudo mkdir -p "$DROP_DIR"
+  {
+    echo "[Timer]"
+    echo "OnCalendar="
+    echo "OnUnitActiveSec="
+    echo "OnCalendar=hourly"
+    echo "Persistent=true"
+  } | sudo tee "$DROP_DIR/override.conf" >/dev/null
+  sudo systemctl daemon-reload
+  sudo systemctl enable "$DISPATCH_TIMER" >/dev/null
+  sudo systemctl restart "$DISPATCH_TIMER"
+  say "⏱  Dispatcher timer: hourly checks, uploads only in window '$UPLOAD_WINDOW' ($DISPATCH_TIMER)"
+else
+  say "⚠️  $DISPATCH_TIMER not installed; run Install Automation first."
+fi
 say "✅ Configuration complete."

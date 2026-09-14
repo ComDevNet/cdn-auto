@@ -14,6 +14,8 @@ if [[ -f "$CONFIG_FILE" ]]; then
 fi
 
 # shellcheck disable=SC1091
+source "$PROJECT_ROOT/scripts/data/lib/s3_helpers.sh"
+# shellcheck disable=SC1091
 source "$PROJECT_ROOT/scripts/data/lib/oc4d_assessment_helpers.sh"
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -36,6 +38,7 @@ OC4D_CLOUD_STUDENT_MAP_URL="${OC4D_CLOUD_STUDENT_MAP_URL:-}"
 OC4D_CLOUD_STUDENTS_API_BASE_URL="${OC4D_CLOUD_STUDENTS_API_BASE_URL:-}"
 OC4D_CLOUD_API_TOKEN="${OC4D_CLOUD_API_TOKEN:-}"
 QUEUE_DIR="$PROJECT_ROOT/00_DATA/00_UPLOAD_QUEUE"
+prepare_queue_dirs "$QUEUE_DIR"
 
 if ! oc4d_assessments_enabled; then
   echo "OC4D assessments are disabled."
@@ -143,12 +146,12 @@ while IFS=$'\t' read -r csv_path s3_key result_id; do
       uploaded=$((uploaded + 1))
       [[ -n "$result_id" ]] && new_uploaded_ids+=("$result_id")
     else
-      queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key"
+      queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key" "$result_id"
       queued=$((queued + 1))
       failed=$((failed + 1))
     fi
   else
-    queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key"
+    queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key" "$result_id"
     queued=$((queued + 1))
   fi
 done < <(

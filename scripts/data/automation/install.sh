@@ -28,79 +28,83 @@ echo ""
 
 # A border to cover the description and its centered
 echo "=============================================================="
-echo "Installing V5 Log Processor Automation System"
+echo "Installing V5 Log Harvester + Dispatcher"
 echo "=============================================================="
 
 echo ""
 
-echo "🚀 Starting Automation Setup for the V5 Log Processor..."
-echo "This will create a systemd service to run the process periodically."
+echo "🚀 Starting Automation Setup..."
+echo "This creates two systemd timers: harvest (frequent) and dispatch (upload window)."
 
 echo ""
 
 # --- Configuration ---
-# The user that the service will run as.
-# The script needs to have the correct permissions for this user.
-SERVICE_USER="pi" 
+SERVICE_USER="pi"
+HARVESTER_NAME="v5-log-harvester"
+DISPATCHER_NAME="v5-log-dispatcher"
+LEGACY_NAME="v5-log-processor"
 
-# Name for the service and related files
-SERVICE_NAME="v5-log-processor"
-
-# The directory where the log file will be stored
 LOG_DIR="/var/log/v5_log_processor"
 LOG_FILE="$LOG_DIR/automation.log"
 
-# Path for the wrapper script that systemd will execute
-WRAPPER_SCRIPT_PATH="/usr/local/bin/run_v5_log_processor.sh"
+HARVEST_WRAPPER="/usr/local/bin/run_v5_log_harvester.sh"
+DISPATCH_WRAPPER="/usr/local/bin/run_v5_log_dispatcher.sh"
+LEGACY_WRAPPER="/usr/local/bin/run_v5_log_processor.sh"
 
-# Determine the absolute path to the project's root directory
-# This makes the script work no matter where it's cloned.
 INSTALLER_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 PROJECT_ROOT=$(cd "$INSTALLER_DIR/../../.." && pwd)
-TARGET_SCRIPT="$PROJECT_ROOT/scripts/data/automation/runner.sh"
 
 echo "📁 Project root directory: $PROJECT_ROOT"
-echo "🎯 Target script: $TARGET_SCRIPT"
 echo ""
 
-# --- Stop and Remove Old Service if it Exists ---
+# --- Stop and Remove Old Services ---
 echo "🔍 Checking for existing automation services..."
-systemctl stop "$SERVICE_NAME.timer" 2>/dev/null || true
-systemctl disable "$SERVICE_NAME.timer" 2>/dev/null || true
-rm -f "/etc/systemd/system/$SERVICE_NAME.service"
-rm -f "/etc/systemd/system/$SERVICE_NAME.timer"
-rm -f "$WRAPPER_SCRIPT_PATH"
+for name in "$LEGACY_NAME" "$HARVESTER_NAME" "$DISPATCHER_NAME"; do
+  systemctl stop "$name.timer" 2>/dev/null || true
+  systemctl disable "$name.timer" 2>/dev/null || true
+  rm -f "/etc/systemd/system/$name.service"
+  rm -f "/etc/systemd/system/$name.timer"
+  rm -rf "/etc/systemd/system/$name.timer.d"
+done
+rm -f "$LEGACY_WRAPPER" "$HARVEST_WRAPPER" "$DISPATCH_WRAPPER"
 echo "✅ Old services cleaned up."
 echo ""
 
-# --- Create Wrapper Script ---
-echo "📝 Creating executor script at $WRAPPER_SCRIPT_PATH..."
-# This wrapper script ensures that the main script is run from the correct directory
-tee "$WRAPPER_SCRIPT_PATH" > /dev/null << SCRIPT_EOF
+# --- Create Wrapper Scripts ---
+echo "📝 Creating executor scripts..."
+tee "$HARVEST_WRAPPER" > /dev/null << SCRIPT_EOF
 #!/bin/bash
-# This is a wrapper script for the systemd service.
-# It changes to the correct project directory before running the script
-# and redirects output to a dedicated log file.
-
-echo "--- V5 Log Processor Automation triggered at \$(date) ---"
-
-# Change to the project directory
+echo "--- V5 Log Harvester triggered at \$(date) ---"
 cd "$PROJECT_ROOT"
-
-# Convert Windows CRLF so sourced helpers cannot abort the runner.
 find "$PROJECT_ROOT/scripts" -name '*.sh' -exec sed -i 's/\r\$//' {} + 2>/dev/null || true
-
-# Execute the main data processing script (all.sh runs collect, process, upload)
-# All output (stdout and stderr) is appended to the log file
-./scripts/data/automation/runner.sh >> "$LOG_FILE" 2>&1
-
-echo "--- V5 Automation run finished at \$(date) ---"
-echo "" 
+./scripts/data/automation/runner.sh harvest >> "$LOG_FILE" 2>&1
+echo "--- V5 Harvester finished at \$(date) ---"
+echo ""
 SCRIPT_EOF
 
-# Make the wrapper script executable
-chmod +x "$WRAPPER_SCRIPT_PATH"
-echo "✅ Executor script created and made executable."
+tee "$DISPATCH_WRAPPER" > /dev/null << SCRIPT_EOF
+#!/bin/bash
+echo "--- V5 Log Dispatcher triggered at \$(date) ---"
+cd "$PROJECT_ROOT"
+find "$PROJECT_ROOT/scripts" -name '*.sh' -exec sed -i 's/\r\$//' {} + 2>/dev/null || true
+./scripts/data/automation/runner.sh dispatch >> "$LOG_FILE" 2>&1
+echo "--- V5 Dispatcher finished at \$(date) ---"
+echo ""
+SCRIPT_EOF
+
+# Legacy alias: harvest then dispatch (manual escape hatch)
+tee "$LEGACY_WRAPPER" > /dev/null << SCRIPT_EOF
+#!/bin/bash
+echo "--- V5 Log Processor (all) triggered at \$(date) ---"
+cd "$PROJECT_ROOT"
+find "$PROJECT_ROOT/scripts" -name '*.sh' -exec sed -i 's/\r\$//' {} + 2>/dev/null || true
+./scripts/data/automation/runner.sh all >> "$LOG_FILE" 2>&1
+echo "--- V5 Automation (all) finished at \$(date) ---"
+echo ""
+SCRIPT_EOF
+
+chmod +x "$HARVEST_WRAPPER" "$DISPATCH_WRAPPER" "$LEGACY_WRAPPER"
+echo "✅ Executor scripts created."
 echo ""
 
 # --- Create Log Directory and File ---
@@ -111,11 +115,43 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$LOG_DIR"
 echo "✅ Log directory configured."
 echo ""
 
-# --- Create systemd Service File ---
-echo "⚙️  Creating systemd service file..."
-tee "/etc/systemd/system/$SERVICE_NAME.service" > /dev/null << SERVICE_EOF
+# --- Harvester unit ---
+echo "⚙️  Creating harvester systemd units..."
+tee "/etc/systemd/system/$HARVESTER_NAME.service" > /dev/null << SERVICE_EOF
 [Unit]
-Description=Run the V5 log processor automation script
+Description=CDN-auto harvest (collect/process/enqueue; no upload)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=$SERVICE_USER
+Group=$SERVICE_USER
+ExecStart=$HARVEST_WRAPPER
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF
+
+tee "/etc/systemd/system/$HARVESTER_NAME.timer" > /dev/null << TIMER_EOF
+[Unit]
+Description=Run CDN-auto harvest periodically while device is on
+Requires=$HARVESTER_NAME.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMER_EOF
+
+# --- Dispatcher unit ---
+echo "⚙️  Creating dispatcher systemd units..."
+tee "/etc/systemd/system/$DISPATCHER_NAME.service" > /dev/null << SERVICE_EOF
+[Unit]
+Description=CDN-auto dispatch (upload pending queue when window open)
 After=network-online.target
 Wants=network-online.target
 
@@ -123,104 +159,66 @@ Wants=network-online.target
 Type=oneshot
 User=$SERVICE_USER
 Group=$SERVICE_USER
-ExecStart=$WRAPPER_SCRIPT_PATH
+ExecStart=$DISPATCH_WRAPPER
 
 [Install]
 WantedBy=multi-user.target
 SERVICE_EOF
 
-echo "✅ Service file created."
-echo ""
-
-# --- Create systemd Timer File ---
-echo "⏰ Creating systemd timer file..."
-# By default, the timer is set to run daily. This can be changed in the 'Configure' menu.
-tee "/etc/systemd/system/$SERVICE_NAME.timer" > /dev/null << TIMER_EOF
+tee "/etc/systemd/system/$DISPATCHER_NAME.timer" > /dev/null << TIMER_EOF
 [Unit]
-Description=Run the V5 log processor automation script periodically
-Requires=$SERVICE_NAME.service
+Description=Check CDN-auto upload window and flush pending queue
+Requires=$DISPATCHER_NAME.service
 
 [Timer]
 OnBootSec=5min
-OnCalendar=daily
-AccuracySec=1h
+OnCalendar=hourly
+AccuracySec=1min
 Persistent=true
 
 [Install]
 WantedBy=timers.target
 TIMER_EOF
 
-echo "✅ Timer file created. Default schedule is set to run daily."
+echo "✅ Service/timer files created."
 echo ""
 
-# --- Enable and Start Services ---
-echo "🔄 Reloading systemd, enabling and starting the timer..."
+# --- Enable and Start ---
+echo "🔄 Reloading systemd, enabling and starting timers..."
 systemctl daemon-reload
-systemctl enable "$SERVICE_NAME.timer"
-systemctl start "$SERVICE_NAME.timer"
-
-# Give a moment for the service to register
+systemctl enable "$HARVESTER_NAME.timer" "$DISPATCHER_NAME.timer"
+systemctl start "$HARVESTER_NAME.timer" "$DISPATCHER_NAME.timer"
 sleep 2
 
-# --- Final Status Report ---
 echo ""
 echo "=============================================================="
-echo "✅ V5 Log Processor Automation installed successfully!"
+echo "✅ Harvester + Dispatcher installed successfully!"
 echo "=============================================================="
 echo ""
-echo "🎉 The V5 log processor will now run automatically on a daily schedule."
-echo "📅 This schedule can be changed using the 'Configure Automation' option."
+echo "🌾 Harvester: every hour while the device is on (override via Configure)."
+echo "📤 Dispatcher: hourly check; uploads only inside UPLOAD_WINDOW."
 echo ""
 echo "💡 Useful commands:"
-echo "   📊 Check timer status:"
-echo "      systemctl status $SERVICE_NAME.timer"
-echo ""
-echo "   📋 View automation logs:"
-echo "      tail -f -n 50 $LOG_FILE"
-echo ""
-echo "   🚀 Trigger manual run:"
-echo "      sudo $WRAPPER_SCRIPT_PATH"
-echo ""
-echo "   ⏹️  Stop automation:"
-echo "      sudo systemctl stop $SERVICE_NAME.timer"
-echo ""
-echo "   ▶️  Start automation:"
-echo "      sudo systemctl start $SERVICE_NAME.timer"
+echo "   systemctl status $HARVESTER_NAME.timer $DISPATCHER_NAME.timer"
+echo "   tail -f -n 50 $LOG_FILE"
+echo "   sudo $HARVEST_WRAPPER"
+echo "   sudo $DISPATCH_WRAPPER"
+echo "   sudo $LEGACY_WRAPPER   # harvest then dispatch"
 echo ""
 
-# Check installation status automatically
-echo "🔍 Verifying installation..."
-sleep 1
-
-# Check if services are running
-if systemctl is-active --quiet "$SERVICE_NAME.timer"; then
-    echo "✅ V5 Log Processor Timer: Active"
+if systemctl is-active --quiet "$HARVESTER_NAME.timer"; then
+    echo "✅ Harvester Timer: Active"
 else
-    echo "❌ V5 Log Processor Timer: Inactive"
+    echo "❌ Harvester Timer: Inactive"
 fi
-
-if systemctl is-enabled --quiet "$SERVICE_NAME.timer"; then
-    echo "✅ V5 Log Processor Timer: Enabled (will start on boot)"
+if systemctl is-active --quiet "$DISPATCHER_NAME.timer"; then
+    echo "✅ Dispatcher Timer: Active"
 else
-    echo "❌ V5 Log Processor Timer: Disabled"
-fi
-
-# Check if wrapper script exists and is executable
-if [ -x "$WRAPPER_SCRIPT_PATH" ]; then
-    echo "✅ Wrapper script: Installed and executable"
-else
-    echo "❌ Wrapper script: Missing or not executable"
-fi
-
-# Check if log directory exists
-if [ -d "$LOG_DIR" ]; then
-    echo "✅ Log directory: Created and accessible"
-else
-    echo "❌ Log directory: Missing"
+    echo "❌ Dispatcher Timer: Inactive"
 fi
 
 echo ""
-echo "🎯 Next step: Use 'Configure Automation' to customize your settings!"
+echo "🎯 Next step: Use 'Configure Automation' to set harvest interval + upload window."
 echo ""
 
 read -p "Press Enter to return to automation menu..."

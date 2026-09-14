@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runner with per-bucket region autodetect.
+# Runner: harvest (collect→process→filter→enqueue) and/or dispatch (windowed S3 flush).
 set -euo pipefail
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -16,6 +16,8 @@ source "$PROJECT_ROOT/scripts/data/lib/s3_helpers.sh"
 source "$PROJECT_ROOT/scripts/data/lib/oc4d_assessment_helpers.sh"
 
 CONFIG_FILE="$PROJECT_ROOT/config/automation.conf"
+# harvest | dispatch | all (default harvest for new timers)
+RUN_MODE="${1:-${CDN_AUTO_MODE:-harvest}}"
 
 load_config() {
   local src="$CONFIG_FILE"
@@ -51,6 +53,16 @@ S3_SUBFOLDER="${S3_SUBFOLDER:-}"
 RACHEL_SUBFOLDER="${RACHEL_SUBFOLDER:-}"
 SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
+HARVEST_INTERVAL="${HARVEST_INTERVAL:-3600}"
+# Default daily devices to a 1h midnight window; others upload whenever dispatcher runs.
+UPLOAD_WINDOW="${UPLOAD_WINDOW:-}"
+if [[ -z "$UPLOAD_WINDOW" ]]; then
+  if [[ "$SCHEDULE_TYPE" == "daily" ]]; then
+    UPLOAD_WINDOW="00:00-01:00"
+  else
+    UPLOAD_WINDOW="always"
+  fi
+fi
 MODULEGAZE_ENABLED="${MODULEGAZE_ENABLED:-1}"
 MODULEGAZE_API_BASE_URL="${MODULEGAZE_API_BASE_URL:-http://127.0.0.1:3002}"
 MODULEGAZE_MODULE_MAP_FILE="${MODULEGAZE_MODULE_MAP_FILE:-$PROJECT_ROOT/config/oc4d/module-map.csv}"
@@ -77,6 +89,8 @@ PROCESSED_ROOT="$DATA_DIR/00_PROCESSED"
 QUEUE_DIR="$DATA_DIR/00_UPLOAD_QUEUE"
 mkdir -p "$DATA_DIR" "$PROCESSED_ROOT" "$QUEUE_DIR"
 prepare_queue_dirs "$QUEUE_DIR"
+export CDN_AUTO_PROCESSED_ROOT="$PROCESSED_ROOT"
+export UPLOAD_WINDOW
 
 TODAY_YMD="$(date '+%Y_%m_%d')"
 NEW_FOLDER="${DEVICE_LOCATION}_logs_${TODAY_YMD}"
@@ -182,7 +196,7 @@ process_rachel_logs() {
   cleanup_raw_run_folder "$DATA_DIR" "$NEW_FOLDER"
 
   if [[ ! -s "$summary" ]]; then
-    log "[info] No new data in summary.csv. Skipping RACHEL upload for this run."
+    log "[info] No new data in summary.csv. Skipping RACHEL enqueue for this run."
     cleanup_processed_run_folder "$PROCESSED_ROOT" "$NEW_FOLDER"
     return 0
   fi
@@ -199,45 +213,20 @@ process_rachel_logs() {
       fi
       ;;
     *)
-      log "[rachel][warn] Unknown SCHEDULE_TYPE '$SCHEDULE_TYPE' in config. Skipping RACHEL upload."
+      log "[rachel][warn] Unknown SCHEDULE_TYPE '$SCHEDULE_TYPE' in config. Skipping RACHEL enqueue."
       return 0
       ;;
   esac
 
   if [[ -n "$FINAL_CSV" && -f "$FINAL_CSV" ]]; then
     file_size="$(du -h "$FINAL_CSV" | cut -f1)"
-    log "[upload] Prepared $(basename "$FINAL_CSV") ($file_size)"
+    log "[enqueue] Prepared $(basename "$FINAL_CSV") ($file_size)"
   else
     FINAL_CSV=""
-    log "[info] No new entries matched the time period. Skipping RACHEL upload for this run."
+    log "[info] No new entries matched the time period. Skipping RACHEL enqueue for this run."
     cleanup_processed_run_folder "$PROCESSED_ROOT" "$NEW_FOLDER"
   fi
 }
-
-process_rachel_logs
-
-ONLINE=0
-if has_internet; then
-  ONLINE=1
-  log "[online] Internet OK. Flushing queued uploads..."
-  export CDN_AUTO_PROCESSED_ROOT="$PROCESSED_ROOT"
-  flush_all_queues "$QUEUE_DIR" || log "[warn] Some queued files could not be flushed; continuing with new exports."
-else
-  log "[offline] No internet. New exports will be queued."
-fi
-
-if [[ -n "$FINAL_CSV" ]]; then
-  if (( ONLINE )); then
-    if upload_one "$FINAL_CSV" "RACHEL"; then
-      cleanup_processed_run_folder "$PROCESSED_ROOT" "$NEW_FOLDER"
-    else
-      log "[warn] Upload failed; queueing new RACHEL file."
-      queue_one "$FINAL_CSV" "$QUEUE_DIR" "RACHEL" "$NEW_FOLDER"
-    fi
-  else
-    queue_one "$FINAL_CSV" "$QUEUE_DIR" "RACHEL" "$NEW_FOLDER"
-  fi
-fi
 
 process_modulegaze_logs() {
   if [[ "$MODULEGAZE_ENABLED" != "1" ]]; then
@@ -281,20 +270,20 @@ process_modulegaze_logs() {
   if ! MODULEGAZE_API_BASE_URL="$MODULEGAZE_API_BASE_URL" \
     MODULEGAZE_MODULE_MAP_FILE="$MODULEGAZE_MODULE_MAP_FILE" \
     python3 "scripts/data/process/processors/modulegaze.py" "$modulegaze_folder"; then
-    log "[modulegaze][warn] ModuleGaze processing failed. Skipping ModuleGaze upload for this run."
+    log "[modulegaze][warn] ModuleGaze processing failed. Skipping ModuleGaze enqueue for this run."
     return 0
   fi
   cleanup_raw_run_folder "$DATA_DIR" "$modulegaze_folder"
 
   if [[ ! -s "$modulegaze_summary" ]]; then
-    log "[modulegaze] No new data in summary.csv. Skipping ModuleGaze upload."
+    log "[modulegaze] No new data in summary.csv. Skipping ModuleGaze enqueue."
     cleanup_processed_run_folder "$PROCESSED_ROOT" "$modulegaze_folder"
     return 0
   fi
 
   log "[modulegaze][filter] Schedule '$SCHEDULE_TYPE'"
   if ! modulegaze_final_basename="$(python3 "scripts/data/automation/filter_time_based.py" "$modulegaze_processed_dir" "$DEVICE_LOCATION" "$SCHEDULE_TYPE" "$RUN_INTERVAL" "modulegaze_logs")"; then
-    log "[modulegaze][warn] ModuleGaze time-window filter failed. Skipping ModuleGaze upload for this run."
+    log "[modulegaze][warn] ModuleGaze time-window filter failed. Skipping ModuleGaze enqueue for this run."
     return 0
   fi
   if [[ -n "$modulegaze_final_basename" ]]; then
@@ -302,25 +291,14 @@ process_modulegaze_logs() {
   fi
 
   if [[ -z "$modulegaze_final_csv" || ! -f "$modulegaze_final_csv" ]]; then
-    log "[modulegaze] No entries matched the time period. Skipping ModuleGaze upload."
+    log "[modulegaze] No entries matched the time period. Skipping ModuleGaze enqueue."
     cleanup_processed_run_folder "$PROCESSED_ROOT" "$modulegaze_folder"
     return 0
   fi
 
-  log "[modulegaze][upload] Prepared $(basename "$modulegaze_final_csv") ($(du -h "$modulegaze_final_csv" | cut -f1))"
-  if (( ONLINE )); then
-    if upload_one "$modulegaze_final_csv" "ModuleGaze"; then
-      cleanup_processed_run_folder "$PROCESSED_ROOT" "$modulegaze_folder"
-    else
-      log "[modulegaze][warn] Upload failed; queueing new ModuleGaze file."
-      queue_one "$modulegaze_final_csv" "$QUEUE_DIR" "ModuleGaze" "$modulegaze_folder"
-    fi
-  else
-    queue_one "$modulegaze_final_csv" "$QUEUE_DIR" "ModuleGaze" "$modulegaze_folder"
-  fi
+  log "[modulegaze][enqueue] Prepared $(basename "$modulegaze_final_csv") ($(du -h "$modulegaze_final_csv" | cut -f1))"
+  queue_one "$modulegaze_final_csv" "$QUEUE_DIR" "ModuleGaze" "$modulegaze_folder"
 }
-
-process_modulegaze_logs
 
 process_oc4d_assessments() {
   if ! oc4d_assessments_enabled; then
@@ -335,8 +313,7 @@ process_oc4d_assessments() {
   local assessments_root="$DATA_DIR/00_OC4D_ASSESSMENTS"
   local manifest_path=""
   local processor_rc=0
-  local uploaded=0 skipped=0 failed=0 queued=0
-  local new_uploaded_ids=()
+  local queued=0 skipped=0 failed=0
 
   mkdir -p "$assessments_root"
   log "[oc4d][process] scripts/data/process/processors/assessment.py"
@@ -369,16 +346,8 @@ process_oc4d_assessments() {
 
   while IFS=$'\t' read -r file_path s3_key _scheme_id; do
     [[ -n "$file_path" && -f "$file_path" ]] || continue
-    if (( ONLINE )); then
-      upload_oc4d_one "$file_path" "$s3_key" || {
-        queue_oc4d_one "$file_path" "$QUEUE_DIR" "$s3_key"
-        queued=$((queued + 1))
-        failed=$((failed + 1))
-      }
-    else
-      queue_oc4d_one "$file_path" "$QUEUE_DIR" "$s3_key"
-      queued=$((queued + 1))
-    fi
+    queue_oc4d_one "$file_path" "$QUEUE_DIR" "$s3_key"
+    queued=$((queued + 1))
   done < <(
     python3 - "$manifest_path" <<'PY'
 import json
@@ -395,18 +364,8 @@ PY
 
   while IFS=$'\t' read -r csv_path s3_key _scheme_id; do
     [[ -n "$csv_path" && -f "$csv_path" ]] || continue
-    if (( ONLINE )); then
-      if upload_oc4d_one "$csv_path" "$s3_key"; then
-        uploaded=$((uploaded + 1))
-      else
-        queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key"
-        queued=$((queued + 1))
-        failed=$((failed + 1))
-      fi
-    else
-      queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key"
-      queued=$((queued + 1))
-    fi
+    queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key"
+    queued=$((queued + 1))
   done < <(
     python3 - "$manifest_path" <<'PY'
 import json
@@ -420,19 +379,8 @@ PY
 
   while IFS=$'\t' read -r csv_path s3_key result_id; do
     [[ -n "$csv_path" && -f "$csv_path" ]] || continue
-    if (( ONLINE )); then
-      if upload_oc4d_one "$csv_path" "$s3_key"; then
-        uploaded=$((uploaded + 1))
-        [[ -n "$result_id" ]] && new_uploaded_ids+=("$result_id")
-      else
-        queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key"
-        queued=$((queued + 1))
-        failed=$((failed + 1))
-      fi
-    else
-      queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key"
-      queued=$((queued + 1))
-    fi
+    queue_oc4d_one "$csv_path" "$QUEUE_DIR" "$s3_key" "$result_id"
+    queued=$((queued + 1))
   done < <(
     python3 - "$manifest_path" <<'PY'
 import json
@@ -458,40 +406,61 @@ manifest = json.load(open(sys.argv[1], encoding="utf-8"))
 print(len(manifest.get("skipped", [])))
 PY
 )"
-  failed=$((failed + $(python3 - "$manifest_path" <<'PY'
+  failed="$(python3 - "$manifest_path" <<'PY'
 import json, sys
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
 print(len(manifest.get("failed", [])))
 PY
-)))
+)"
 
-  if (( ${#new_uploaded_ids[@]} > 0 )); then
-    python3 - "$OC4D_STATE_FILE" "${new_uploaded_ids[@]}" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-state_path = Path(sys.argv[1])
-ids = [item for item in sys.argv[2:] if item]
-uploaded = set()
-if state_path.exists():
-    try:
-        uploaded = set(json.loads(state_path.read_text(encoding="utf-8")).get("uploadedIds", []))
-    except json.JSONDecodeError:
-        uploaded = set()
-uploaded.update(ids)
-state_path.parent.mkdir(parents=True, exist_ok=True)
-state_path.write_text(json.dumps({"uploadedIds": sorted(uploaded)}, indent=2) + "\n", encoding="utf-8")
-PY
-  fi
-
-  log "[oc4d][report] uploaded=$uploaded queued=$queued skipped=$skipped failed=$failed"
+  log "[oc4d][report] queued=$queued skipped=$skipped failed=$failed"
   if (( failed > 0 )); then
-    log "[oc4d][warn] Assessment stage finished with validation/upload failures."
+    log "[oc4d][warn] Assessment stage finished with validation failures."
   fi
   return 0
 }
 
-process_oc4d_assessments
+run_harvest() {
+  log "[mode] harvest (interval hint=${HARVEST_INTERVAL}s, filter=$SCHEDULE_TYPE)"
+  process_rachel_logs
+  if [[ -n "$FINAL_CSV" ]]; then
+    queue_one "$FINAL_CSV" "$QUEUE_DIR" "RACHEL" "$NEW_FOLDER"
+  fi
+  process_modulegaze_logs
+  process_oc4d_assessments
+  write_queue_marker "$QUEUE_DIR" "last_harvest_ok"
+  log "[harvest] Done. Pending RACHEL=$(count_queue_state "$QUEUE_DIR" RACHEL pending) ModuleGaze=$(count_queue_state "$QUEUE_DIR" ModuleGaze pending) OC4D=$(count_queue_state "$QUEUE_DIR" OC4DAssessments pending)"
+}
 
-log "[done] Run finished."
+run_dispatch() {
+  log "[mode] dispatch (upload_window=$UPLOAD_WINDOW)"
+  if ! upload_window_open; then
+    log "[dispatch] $(next_upload_window_hint); not uploading."
+    return 0
+  fi
+  if ! has_internet; then
+    log "[dispatch] Offline; leaving pending items queued."
+    return 0
+  fi
+  log "[dispatch] Window open and online; flushing pending uploads..."
+  flush_all_queues "$QUEUE_DIR" || log "[warn] Some queued files could not be flushed."
+}
+
+case "$RUN_MODE" in
+  harvest)
+    run_harvest
+    ;;
+  dispatch)
+    run_dispatch
+    ;;
+  all|legacy)
+    run_harvest
+    run_dispatch
+    ;;
+  *)
+    log "[error] Unknown mode '$RUN_MODE' (use harvest|dispatch|all)"
+    exit 2
+    ;;
+esac
+
+log "[done] Run finished (mode=$RUN_MODE)."

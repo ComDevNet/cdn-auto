@@ -121,7 +121,12 @@ oc4d_assessments_enabled() {
 
 oc4d_queue_dir() {
   local queue_root="${1:?queue root required}"
-  printf '%s/OC4DAssessments' "$queue_root"
+  local state="${2:-pending}"
+  if declare -F queue_state_dir >/dev/null 2>&1; then
+    queue_state_dir "$queue_root" "OC4DAssessments" "$state"
+  else
+    printf '%s/OC4DAssessments/%s' "$queue_root" "$state"
+  fi
 }
 
 oc4d_sidecar_for_csv() {
@@ -155,22 +160,73 @@ queue_oc4d_one() {
   local file_path="$1"
   local queue_root="${2:?queue root required}"
   local s3_key="$3"
-  local target_dir base sidecar
+  local result_id="${4:-}"
+  local target_dir base sidecar tmp dest completed_dir uploading_dir state_file
 
-  target_dir="$(oc4d_queue_dir "$queue_root")"
+  if declare -F prepare_queue_dirs >/dev/null 2>&1; then
+    prepare_queue_dirs "$queue_root"
+  fi
+  target_dir="$(oc4d_queue_dir "$queue_root" "pending")"
   mkdir -p "$target_dir"
   base="$(basename "$file_path")"
-  cp -f "$file_path" "$target_dir/$base"
-  sidecar="$(oc4d_sidecar_for_csv "$target_dir/$base")"
-  printf '%s\n' "$s3_key" > "$sidecar"
-  log "[oc4d][queue] Queued $base (key=$s3_key)"
+  dest="$target_dir/$base"
+  completed_dir="$(oc4d_queue_dir "$queue_root" "completed")"
+  uploading_dir="$(oc4d_queue_dir "$queue_root" "uploading")"
+
+  if [[ -f "$completed_dir/$base" || -f "$uploading_dir/$base" ]]; then
+    log "[oc4d][queue] Skip $base (already completed/uploading)."
+    return 0
+  fi
+  # Same S3 key already pending → skip (dedup across harvest reruns).
+  if [[ -f "$dest" ]]; then
+    existing_key="$(tr -d '\r' < "$(oc4d_sidecar_for_csv "$dest")" 2>/dev/null | head -n1 || true)"
+    if [[ "$existing_key" == "$s3_key" ]]; then
+      log "[oc4d][queue] Skip $base (identical key already pending)."
+      return 0
+    fi
+  fi
+
+  tmp="$target_dir/.${base}.tmp.$$"
+  cp -f "$file_path" "$tmp"
+  mv -f "$tmp" "$dest"
+  sidecar="$(oc4d_sidecar_for_csv "$dest")"
+  printf '%s\n' "$s3_key" > "${sidecar}.tmp.$$"
+  mv -f "${sidecar}.tmp.$$" "$sidecar"
+
+  # ponytail: record result_id at enqueue so the next harvest does not re-emit; pending holds delivery truth
+  if [[ -n "$result_id" ]]; then
+    state_file="${OC4D_STATE_FILE:-}"
+    if [[ -n "$state_file" ]]; then
+      python3 - "$state_file" "$result_id" <<'PY'
+import json, sys
+from pathlib import Path
+state_path = Path(sys.argv[1])
+rid = sys.argv[2]
+uploaded = set()
+if state_path.exists():
+    try:
+        uploaded = set(json.loads(state_path.read_text(encoding="utf-8")).get("uploadedIds", []))
+    except json.JSONDecodeError:
+        uploaded = set()
+uploaded.add(rid)
+state_path.parent.mkdir(parents=True, exist_ok=True)
+tmp = state_path.with_suffix(".tmp")
+tmp.write_text(json.dumps({"uploadedIds": sorted(uploaded)}, indent=2) + "\n", encoding="utf-8")
+tmp.replace(state_path)
+PY
+    fi
+  fi
+  log "[oc4d][queue] Queued $base (pending, key=$s3_key)"
 }
 
 flush_oc4d_queue() {
   local queue_root="${1:?queue root required}"
-  local queue_dir failed=0 file sidecar s3_key files=()
+  local queue_dir uploading_dir completed_dir failed=0 file active sidecar s3_key files=()
 
-  queue_dir="$(oc4d_queue_dir "$queue_root")"
+  queue_dir="$(oc4d_queue_dir "$queue_root" "pending")"
+  uploading_dir="$(oc4d_queue_dir "$queue_root" "uploading")"
+  completed_dir="$(oc4d_queue_dir "$queue_root" "completed")"
+  mkdir -p "$queue_dir" "$uploading_dir" "$completed_dir"
   [[ -d "$queue_dir" ]] || return 0
 
   shopt -s nullglob
@@ -189,11 +245,27 @@ flush_oc4d_queue() {
       failed=1
       continue
     fi
-    s3_key="$(tr -d '\r' < "$sidecar" | head -n1)"
-    if upload_oc4d_one "$file" "$s3_key"; then
-      rm -f "$file" "$sidecar"
+    if declare -F _queue_move_item >/dev/null 2>&1; then
+      active="$(_queue_move_item "$file" "$uploading_dir")" || {
+        failed=1
+        continue
+      }
     else
-      log "[oc4d] Leaving queued: $(basename "$file")"
+      active="$file"
+    fi
+    sidecar="$(oc4d_sidecar_for_csv "$active")"
+    s3_key="$(tr -d '\r' < "$sidecar" | head -n1)"
+    if upload_oc4d_one "$active" "$s3_key"; then
+      if declare -F _queue_move_item >/dev/null 2>&1; then
+        _queue_move_item "$active" "$completed_dir" >/dev/null || rm -f "$active" "$sidecar"
+      else
+        rm -f "$active" "$sidecar"
+      fi
+    else
+      log "[oc4d] Leaving pending: $(basename "$active")"
+      if declare -F _queue_move_item >/dev/null 2>&1; then
+        _queue_move_item "$active" "$queue_dir" >/dev/null || true
+      fi
       failed=1
     fi
   done

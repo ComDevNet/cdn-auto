@@ -37,16 +37,21 @@ load_config
 QUEUE_DIR="$PROJECT_ROOT/00_DATA/00_UPLOAD_QUEUE"
 prepare_queue_dirs "$QUEUE_DIR"
 export CDN_AUTO_PROCESSED_ROOT="$PROJECT_ROOT/00_DATA/00_PROCESSED"
+export FORCE_UPLOAD=1
+UPLOAD_WINDOW="${UPLOAD_WINDOW:-always}"
+export UPLOAD_WINDOW
 
-if ! compgen -G "$QUEUE_DIR/*.csv" >/dev/null \
-  && ! compgen -G "$QUEUE_DIR/RACHEL/*.csv" >/dev/null \
-  && ! compgen -G "$QUEUE_DIR/ModuleGaze/*.csv" >/dev/null \
-  && ! compgen -G "$QUEUE_DIR/OC4DAssessments/*.csv" >/dev/null \
-  && ! compgen -G "$QUEUE_DIR/OC4DAssessments/*.json" >/dev/null; then
-  log "Queue empty at $QUEUE_DIR"
+pending_total=0
+for stage in RACHEL ModuleGaze OC4DAssessments; do
+  pending_total=$((pending_total + $(count_queue_state "$QUEUE_DIR" "$stage" pending)))
+done
+
+if (( pending_total == 0 )); then
+  log "Queue empty at $QUEUE_DIR (no pending items)"
   exit 0
 fi
 
+log "Force-flushing $pending_total pending item(s) (bypassing upload window)..."
 if flush_all_queues "$QUEUE_DIR"; then
   log "All queued files uploaded."
 else

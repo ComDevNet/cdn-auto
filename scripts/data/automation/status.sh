@@ -1,8 +1,11 @@
 #!/bin/sh
-# cdn-auto status v7: POSIX sh compatible, sudo-aware, quiet on permission errors
+# cdn-auto status: harvest/dispatch timers, pending queue, upload window
 
-SERVICE="v5-log-processor.service"
-TIMER="v5-log-processor.timer"
+HARVESTER_SERVICE="v5-log-harvester.service"
+HARVESTER_TIMER="v5-log-harvester.timer"
+DISPATCHER_SERVICE="v5-log-dispatcher.service"
+DISPATCHER_TIMER="v5-log-dispatcher.timer"
+LEGACY_TIMER="v5-log-processor.timer"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" >/dev/null 2>&1 && pwd)
 PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." >/dev/null 2>&1 && pwd)
 CONFIG_FILE="$PROJECT_ROOT/config/automation.conf"
@@ -56,10 +59,28 @@ read_config() {
   return 1
 }
 
-cfg_get() {
-  key="$1"
-  content="$(read_config 2>/dev/null || true)"
-  echo "$content" | awk -F= -v k="$key" 'index($0,k"=")==1 { $1=""; sub(/^=/,"",$0); print $0; exit }' | sed 's/^"//; s/"$//'
+count_state() {
+  stage="$1"
+  state="$2"
+  dir="$QUEUE_DIR/$stage/$state"
+  if [ ! -d "$dir" ]; then
+    echo 0
+    return 0
+  fi
+  find "$dir" -maxdepth 1 -type f \( -name '*.csv' -o -name '*.json' \) 2>/dev/null | wc -l | tr -d ' '
+}
+
+show_timer() {
+  unit="$1"
+  label="$2"
+  T_ACTIVE="$(as_root systemctl show "$unit" -p ActiveState --value)"
+  T_LAST="$(as_root systemctl show "$unit" -p LastTriggerUSec --value)"
+  T_NEXT="$(as_root systemctl show "$unit" -p NextElapseUSecRealtime --value)"
+  [ -z "$T_NEXT" ] && T_NEXT="$(as_root systemctl show "$unit" -p NextElapseUSec --value)"
+  echo "  $label"
+  echo "    Timer      : $unit (${T_ACTIVE:-unknown})"
+  echo "    Last run   : ${T_LAST:-<unknown>}"
+  echo "    Next run   : ${T_NEXT:-<unknown>}"
 }
 
 hr
@@ -71,6 +92,9 @@ echo "Config read  : ${CFG_METHOD:-<not yet>}"
 
 echo
 echo "CONFIG"
+UPLOAD_WINDOW=""
+HARVEST_INTERVAL=""
+SCHEDULE_TYPE=""
 if content="$(read_config)"; then
   SERVER_VERSION=$(echo "$content" | awk -F= '/^SERVER_VERSION=/{print $2}' | sed 's/^"//; s/"$//')
   DEVICE_LOCATION=$(echo "$content" | awk -F= '/^DEVICE_LOCATION=/{print $2}' | sed 's/^"//; s/"$//')
@@ -86,11 +110,17 @@ if content="$(read_config)"; then
   OC4D_API_BASE_URL=$(echo "$content" | awk -F= '/^OC4D_API_BASE_URL=/{print $2}' | sed 's/^"//; s/"$//')
   OC4D_BUCKET=$(echo "$content" | awk -F= '/^OC4D_BUCKET=/{print $2}' | sed 's/^"//; s/"$//')
   OC4D_PARENT_ORG=$(echo "$content" | awk -F= '/^OC4D_PARENT_ORG=/{print $2}' | sed 's/^"//; s/"$//')
+  SCHEDULE_TYPE=$(echo "$content" | awk -F= '/^SCHEDULE_TYPE=/{print $2}' | sed 's/^"//; s/"$//')
+  HARVEST_INTERVAL=$(echo "$content" | awk -F= '/^HARVEST_INTERVAL=/{print $2}' | sed 's/^"//; s/"$//')
+  UPLOAD_WINDOW=$(echo "$content" | awk -F= '/^UPLOAD_WINDOW=/{print $2}' | sed 's/^"//; s/"$//')
   echo "  SERVER_VERSION = ${SERVER_VERSION:-<unset>}"
   echo "  PYTHON_SCRIPT  = ${PYTHON_SCRIPT:-<unset>}"
   echo "  DEVICE_LOCATION= ${DEVICE_LOCATION:-<unset>}"
   echo "  S3_BUCKET      = ${S3_BUCKET:-<unset>}"
   echo "  S3_SUBFOLDER   = ${S3_SUBFOLDER:-<unset>}"
+  echo "  FILTER WINDOW  = ${SCHEDULE_TYPE:-<unset>}"
+  echo "  HARVEST_INTVL  = ${HARVEST_INTERVAL:-3600}s"
+  echo "  UPLOAD_WINDOW  = ${UPLOAD_WINDOW:-<default>}"
   echo "  MODULEGAZE     = ${MODULEGAZE_ENABLED:-1}"
   echo "  MODULEGAZE API = ${MODULEGAZE_API_BASE_URL:-http://127.0.0.1:3002}"
   echo "  MODULEGAZE map = ${MODULEGAZE_MODULE_MAP_FILE:-$PROJECT_ROOT/config/oc4d/module-map.csv}"
@@ -107,17 +137,12 @@ echo
 
 echo "SYSTEMD"
 if have systemctl; then
-  T_ACTIVE="$(as_root systemctl show "$TIMER" -p ActiveState --value)"
-  T_LAST="$(as_root systemctl show "$TIMER" -p LastTriggerUSec --value)"
-  T_NEXT="$(as_root systemctl show "$TIMER" -p NextElapseUSecRealtime --value)"
-  [ -z "$T_NEXT" ] && T_NEXT="$(as_root systemctl show "$TIMER" -p NextElapseUSec --value)"
-  echo "  Timer      : $TIMER (${T_ACTIVE:-unknown})"
-  echo "  Last run   : ${T_LAST:-<unknown>}"
-  echo "  Next run   : ${T_NEXT:-<unknown>}"
-  S_ACTIVE="$(as_root systemctl show "$SERVICE" -p ActiveState --value)"
-  S_SUB="$(as_root systemctl show "$SERVICE" -p SubState --value)"
-  S_RC="$(as_root systemctl show "$SERVICE" -p ExecMainStatus --value)"
-  echo "  Service    : $SERVICE (${S_ACTIVE:-unknown}/${S_SUB:-unknown}, last exit=${S_RC:-?})"
+  show_timer "$HARVESTER_TIMER" "Harvester"
+  show_timer "$DISPATCHER_TIMER" "Dispatcher"
+  if systemctl list-unit-files "$LEGACY_TIMER" >/dev/null 2>&1; then
+    LEG_ACTIVE="$(as_root systemctl show "$LEGACY_TIMER" -p ActiveState --value)"
+    echo "  Legacy      : $LEGACY_TIMER (${LEG_ACTIVE:-unknown}) — reinstall to migrate"
+  fi
 else
   echo "  systemctl not available."
 fi
@@ -126,20 +151,25 @@ echo
 echo "QUEUE"
 mkdir -p "$QUEUE_DIR" 2>/dev/null
 echo "  Directory  : $QUEUE_DIR"
-for q_name in "." "RACHEL" "ModuleGaze" "OC4DAssessments"; do
-  if [ "$q_name" = "." ]; then
-    q_path="$QUEUE_DIR"
-    label="legacy"
-  else
-    q_path="$QUEUE_DIR/$q_name"
-    label="$q_name"
-  fi
-  Q_COUNT="$(find "$q_path" -maxdepth 1 -type f -name '*.csv' 2>/dev/null | wc -l | tr -d ' ')"
-  echo "  $label      : $Q_COUNT queued CSV(s)"
-  if [ "$Q_COUNT" != "0" ]; then
-    find "$q_path" -maxdepth 1 -type f -name '*.csv' -printf '    %TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | sort
+for stage in RACHEL ModuleGaze OC4DAssessments; do
+  p=$(count_state "$stage" pending)
+  u=$(count_state "$stage" uploading)
+  c=$(count_state "$stage" completed)
+  f=$(count_state "$stage" failed)
+  echo "  $stage : pending=$p uploading=$u completed=$c failed=$f"
+  if [ "$p" != "0" ]; then
+    find "$QUEUE_DIR/$stage/pending" -maxdepth 1 -type f \( -name '*.csv' -o -name '*.json' \) -printf '    %TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | sort
   fi
 done
+LAST_H=$(tr -d '\r\n' < "$QUEUE_DIR/.last_harvest_ok" 2>/dev/null || true)
+LAST_U=$(tr -d '\r\n' < "$QUEUE_DIR/.last_upload_ok" 2>/dev/null || true)
+echo "  Last harvest OK : ${LAST_H:-<never>}"
+echo "  Last upload OK  : ${LAST_U:-<never>}"
+if [ -z "$UPLOAD_WINDOW" ] || [ "$UPLOAD_WINDOW" = "always" ]; then
+  echo "  Next upload win : always (when dispatcher runs + online)"
+else
+  echo "  Upload window   : $UPLOAD_WINDOW"
+fi
 echo
 
 echo "PROCESSED"
@@ -202,7 +232,7 @@ echo
 
 echo "LOGS (last 50 lines)"
 if have journalctl; then
-  as_root journalctl -u "$SERVICE" --no-pager -n 50 2>/dev/null || true
+  as_root journalctl -u "$HARVESTER_SERVICE" -u "$DISPATCHER_SERVICE" --no-pager -n 50 2>/dev/null || true
 elif [ -f "$LOG_FILE" ]; then
   as_root tail -n 50 "$LOG_FILE" 2>/dev/null || true
 else
@@ -212,17 +242,14 @@ echo
 hr
 echo "Done."
 
-# Wait for Enter only if we're attached to a terminal
 if [ -t 0 ]; then
   printf "\nPress Enter to return to the main screen..."
   IFS= read -r _
 fi
 
-# Re-enter the main menu reliably (works even if the menu used 'exec' to launch us)
 MAIN="$SCRIPT_DIR/main.sh"
 if [ -x "$MAIN" ]; then
   exec "$MAIN"
 fi
 
 exit 0
-
