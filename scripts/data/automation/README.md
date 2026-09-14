@@ -2,7 +2,7 @@
 
 CDN-auto **harvests whenever the device is on** into a durable local queue, and **uploads only during a configured upload window** (or when you force-flush).
 
-Near-realtime: choose **Near-realtime every 15/30/60 min** in Configure. That sets `SCHEDULE_TYPE=near_realtime` (rolling current bucket including incomplete activity), `HARVEST_INTERVAL`/`RUN_INTERVAL` to match, and `UPLOAD_WINDOW=always` so dispatch runs on the same cadence.
+Near-realtime: choose **Near-realtime every 15/30/60 min** in Configure. That sets `SCHEDULE_TYPE=near_realtime` (today→now rolling window, stamped every interval), `HARVEST_INTERVAL`/`RUN_INTERVAL` to match, and `UPLOAD_WINDOW=always` so dispatch runs on the same cadence.
 
 Streams in v1: RACHEL usage, ModuleGaze, OC4D assessments. **Kolibri is out** (not produced by cdn-auto).
 

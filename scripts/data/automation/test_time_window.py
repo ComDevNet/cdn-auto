@@ -23,7 +23,7 @@ def main() -> None:
     assert monthly.file_stamp == "08_2026", monthly.file_stamp
 
     nr = compute_window("near_realtime", now=now, run_interval_seconds=900)
-    assert nr.start == datetime(2026, 9, 14, 14, 15, 0), nr.start
+    assert nr.start == datetime(2026, 9, 14, 0, 0, 0), nr.start
     assert nr.end == datetime(2026, 9, 14, 14, 22, 30), nr.end
     assert nr.file_stamp == "nr_20260914_1415_900s", nr.file_stamp
 
@@ -31,12 +31,14 @@ def main() -> None:
         "near_realtime", now=datetime(2026, 9, 14, 14, 28, 0), run_interval_seconds=900
     )
     assert later.file_stamp == nr.file_stamp
+    assert later.start == nr.start
 
     nxt = compute_window(
         "near_realtime", now=datetime(2026, 9, 14, 14, 30, 0), run_interval_seconds=900
     )
     assert nxt.file_stamp != nr.file_stamp
-    assert nxt.start == datetime(2026, 9, 14, 14, 30, 0)
+    assert nxt.start == datetime(2026, 9, 14, 0, 0, 0)
+    assert nxt.end == datetime(2026, 9, 14, 14, 30, 0)
 
     print("PASS: near_realtime + legacy schedule windows")
 
