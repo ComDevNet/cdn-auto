@@ -221,5 +221,10 @@ echo ""
 echo "🎯 Next step: Use 'Configure Automation' to set harvest interval + upload window."
 echo ""
 
+# Non-interactive installs (migrate_near_realtime / CI) skip the menu handoff.
+if [[ "${NONINTERACTIVE:-}" == "1" ]] || [[ ! -t 0 ]]; then
+  exit 0
+fi
+
 read -p "Press Enter to return to automation menu..."
 exec ./scripts/data/automation/main.sh

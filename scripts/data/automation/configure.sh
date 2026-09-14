@@ -269,10 +269,10 @@ else
   PYTHON_SCRIPT="oc4d"
 fi
 
-# If user selected a non-castle log type, and hourly was previously configured,
-# gracefully downgrade to daily to prevent an invalid configuration.
+# If user selected a non-castle log type, and completed-hour Castle schedule was configured,
+# gracefully downgrade to daily (near_realtime is allowed for all sites).
 if [[ "$PYTHON_SCRIPT" != "cape_coast_d" && "$SCHEDULE_TYPE" == "hourly" ]]; then
-  say "⚠️ Hourly schedule is only for Cape Coast Castle logs. Downgrading to daily."
+  say "⚠️ Hourly (prior completed hour) is only for Cape Coast Castle logs. Downgrading to daily."
   SCHEDULE_TYPE="daily"
 fi
 
@@ -345,19 +345,25 @@ RACHEL_SUBFOLDER="$(sanitize_subfolder "$RACHEL_SUBFOLDER")"
 
 # --- Data filter window (what rows go into each CSV) ---
 sched_opts=(
+  near_15  "Near-realtime every 15 min (rolling current bucket)"
+  near_30  "Near-realtime every 30 min (rolling current bucket)"
+  near_60  "Near-realtime every 60 min (rolling current bucket)"
   daily   "Prior calendar day"
   weekly  "Prior calendar week"
   monthly "Prior calendar month"
   yearly  "Prior calendar year"
-  custom  "Custom lookback (seconds)"
+  custom  "Custom completed lookback (seconds)"
 )
-# If castle is selected, add hourly to the beginning of the options
+# If castle is selected, add prior-hour to the options
 if [[ "$PYTHON_SCRIPT" == "cape_coast_d" ]]; then
-  sched_opts=( hourly "Prior hour" "${sched_opts[@]}" )
+  sched_opts=( hourly "Prior completed hour (Castle)" "${sched_opts[@]}" )
 fi
-sched=$(menu_select "Choose data filter window (SCHEDULE_TYPE)" 15 74 7 "${sched_opts[@]}")
+sched=$(menu_select "Choose data filter window (SCHEDULE_TYPE)" 18 74 10 "${sched_opts[@]}")
 
 case "$sched" in
+  near_15) SCHEDULE_TYPE="near_realtime"; RUN_INTERVAL="900"; HARVEST_INTERVAL="900"; UPLOAD_WINDOW="always" ;;
+  near_30) SCHEDULE_TYPE="near_realtime"; RUN_INTERVAL="1800"; HARVEST_INTERVAL="1800"; UPLOAD_WINDOW="always" ;;
+  near_60) SCHEDULE_TYPE="near_realtime"; RUN_INTERVAL="3600"; HARVEST_INTERVAL="3600"; UPLOAD_WINDOW="always" ;;
   hourly)  SCHEDULE_TYPE="hourly";  RUN_INTERVAL="3600" ;;
   daily)   SCHEDULE_TYPE="daily";   RUN_INTERVAL="86400" ;;
   weekly)  SCHEDULE_TYPE="weekly";  RUN_INTERVAL="604800" ;;
@@ -367,38 +373,43 @@ case "$sched" in
 esac
 
 # --- Harvest interval (how often to collect while device is on) ---
-while :; do
-  prompt_text "Harvest interval seconds (default 3600 = hourly)" "${HARVEST_INTERVAL}" HARVEST_INTERVAL
-  [[ "$HARVEST_INTERVAL" =~ ^[0-9]+$ ]] && (( HARVEST_INTERVAL >= 300 )) && break || say "Enter a number >= 300."
-done
+if [[ "$SCHEDULE_TYPE" == "near_realtime" ]]; then
+  HARVEST_INTERVAL="$RUN_INTERVAL"
+  say "Near-realtime: harvest/upload every ${HARVEST_INTERVAL}s, upload window=always"
+else
+  while :; do
+    prompt_text "Harvest interval seconds (default 3600 = hourly)" "${HARVEST_INTERVAL}" HARVEST_INTERVAL
+    [[ "$HARVEST_INTERVAL" =~ ^[0-9]+$ ]] && (( HARVEST_INTERVAL >= 300 )) && break || say "Enter a number >= 300."
+  done
 
-# --- Upload window (when dispatcher may send to S3) ---
-if [[ -z "$UPLOAD_WINDOW" ]]; then
-  if [[ "$SCHEDULE_TYPE" == "daily" ]]; then
-    UPLOAD_WINDOW="00:00-01:00"
-  else
-    UPLOAD_WINDOW="always"
+  # --- Upload window (when dispatcher may send to S3) ---
+  if [[ -z "$UPLOAD_WINDOW" ]]; then
+    if [[ "$SCHEDULE_TYPE" == "daily" ]]; then
+      UPLOAD_WINDOW="00:00-01:00"
+    else
+      UPLOAD_WINDOW="always"
+    fi
   fi
+  upload_sel=$(menu_select "Choose upload window" 14 74 6 \
+    daily_midnight "Daily 00:00-01:00 (default for daily filter)" \
+    offpeak "Off-peak 22:00-06:00" \
+    always "Always (whenever dispatcher runs + online)" \
+    custom "Custom HH:MM-HH:MM range" \
+  )
+  case "$upload_sel" in
+    daily_midnight) UPLOAD_WINDOW="00:00-01:00" ;;
+    offpeak) UPLOAD_WINDOW="22:00-06:00" ;;
+    always) UPLOAD_WINDOW="always" ;;
+    custom)
+      while :; do
+        prompt_text "Upload window HH:MM-HH:MM (or always)" "${UPLOAD_WINDOW}" UPLOAD_WINDOW
+        [[ "$UPLOAD_WINDOW" == "always" ]] && break
+        [[ "$UPLOAD_WINDOW" =~ ^[0-2][0-9]:[0-5][0-9]-[0-2][0-9]:[0-5][0-9]$ ]] && break
+        say "Use always or HH:MM-HH:MM"
+      done
+      ;;
+  esac
 fi
-upload_sel=$(menu_select "Choose upload window" 14 74 6 \
-  daily_midnight "Daily 00:00-01:00 (default for daily filter)" \
-  offpeak "Off-peak 22:00-06:00" \
-  always "Always (whenever dispatcher runs + online)" \
-  custom "Custom HH:MM-HH:MM range" \
-)
-case "$upload_sel" in
-  daily_midnight) UPLOAD_WINDOW="00:00-01:00" ;;
-  offpeak) UPLOAD_WINDOW="22:00-06:00" ;;
-  always) UPLOAD_WINDOW="always" ;;
-  custom)
-    while :; do
-      prompt_text "Upload window HH:MM-HH:MM (or always)" "${UPLOAD_WINDOW}" UPLOAD_WINDOW
-      [[ "$UPLOAD_WINDOW" == "always" ]] && break
-      [[ "$UPLOAD_WINDOW" =~ ^[0-2][0-9]:[0-5][0-9]-[0-2][0-9]:[0-5][0-9]$ ]] && break
-      say "Use always or HH:MM-HH:MM"
-    done
-    ;;
-esac
 
 summary=$(cat <<EOF
 Service user   : $SERVICE_USER
@@ -549,13 +560,22 @@ if systemctl list-unit-files "$DISPATCH_TIMER" >/dev/null 2>&1; then
     echo "[Timer]"
     echo "OnCalendar="
     echo "OnUnitActiveSec="
-    echo "OnCalendar=hourly"
+    if [[ "$UPLOAD_WINDOW" == "always" ]]; then
+      # Match harvest cadence for near-realtime / always-upload sites
+      echo "OnUnitActiveSec=${HARVEST_INTERVAL}"
+    else
+      echo "OnCalendar=hourly"
+    fi
     echo "Persistent=true"
   } | sudo tee "$DROP_DIR/override.conf" >/dev/null
   sudo systemctl daemon-reload
   sudo systemctl enable "$DISPATCH_TIMER" >/dev/null
   sudo systemctl restart "$DISPATCH_TIMER"
-  say "⏱  Dispatcher timer: hourly checks, uploads only in window '$UPLOAD_WINDOW' ($DISPATCH_TIMER)"
+  if [[ "$UPLOAD_WINDOW" == "always" ]]; then
+    say "⏱  Dispatcher timer: every ${HARVEST_INTERVAL}s, window '$UPLOAD_WINDOW' ($DISPATCH_TIMER)"
+  else
+    say "⏱  Dispatcher timer: hourly checks, uploads only in window '$UPLOAD_WINDOW' ($DISPATCH_TIMER)"
+  fi
 else
   say "⚠️  $DISPATCH_TIMER not installed; run Install Automation first."
 fi

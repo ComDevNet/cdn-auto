@@ -18,7 +18,8 @@ def column_index(header, column_name, fallback=None):
 
 def process_time_based_csv(folder, location, schedule_type, run_interval_seconds=None, suffix="access_logs"):
     """
-    Filters summary.csv for the last completed interval and prints the final filename on success.
+    Filters summary.csv for the schedule window and prints the final filename on success.
+    near_realtime/rolling windows include the current incomplete bucket.
     """
     input_path = os.path.join(folder, "summary.csv")
     temp_output_path = os.path.join(folder, "temp_filtered.csv")

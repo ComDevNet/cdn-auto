@@ -101,6 +101,27 @@ def compute_window(
             ),
         )
 
+    # Near-realtime: current incomplete bucket (includes activity happening now).
+    # Stable file_stamp per bucket → re-harvest replaces the same pending key (delta-safe).
+    if schedule_type in ("near_realtime", "rolling"):
+        interval = run_interval_seconds if run_interval_seconds and run_interval_seconds >= 60 else 900
+        epoch = datetime(1970, 1, 1)
+        now_seconds = int((now - epoch).total_seconds())
+        bucket_start_sec = (now_seconds // interval) * interval
+        start = epoch + timedelta(seconds=bucket_start_sec)
+        end = now.replace(microsecond=0)
+        if end < start:
+            end = start
+        return Window(
+            start=start,
+            end=end,
+            file_stamp=f"nr_{start.strftime('%Y%m%d_%H%M')}_{interval}s",
+            label=(
+                f"Near-realtime {interval}s bucket "
+                f"({start.strftime('%Y-%m-%d %H:%M:%S')} to {end.strftime('%Y-%m-%d %H:%M:%S')})"
+            ),
+        )
+
     raise ValueError(f"Unsupported schedule type: {schedule_type}")
 
 

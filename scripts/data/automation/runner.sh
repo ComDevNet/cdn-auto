@@ -54,10 +54,12 @@ RACHEL_SUBFOLDER="${RACHEL_SUBFOLDER:-}"
 SCHEDULE_TYPE="${SCHEDULE_TYPE:-daily}"
 RUN_INTERVAL="${RUN_INTERVAL:-86400}"
 HARVEST_INTERVAL="${HARVEST_INTERVAL:-3600}"
-# Default daily devices to a 1h midnight window; others upload whenever dispatcher runs.
+# Default daily devices to a 1h midnight window; near_realtime / others upload whenever dispatcher runs.
 UPLOAD_WINDOW="${UPLOAD_WINDOW:-}"
 if [[ -z "$UPLOAD_WINDOW" ]]; then
-  if [[ "$SCHEDULE_TYPE" == "daily" ]]; then
+  if [[ "$SCHEDULE_TYPE" == "near_realtime" || "$SCHEDULE_TYPE" == "rolling" ]]; then
+    UPLOAD_WINDOW="always"
+  elif [[ "$SCHEDULE_TYPE" == "daily" ]]; then
     UPLOAD_WINDOW="00:00-01:00"
   else
     UPLOAD_WINDOW="always"
@@ -202,7 +204,7 @@ process_rachel_logs() {
   fi
 
   case "$SCHEDULE_TYPE" in
-    hourly|daily|weekly|monthly|yearly|custom)
+    hourly|daily|weekly|monthly|yearly|custom|near_realtime|rolling)
       log "[filter] Schedule '$SCHEDULE_TYPE'"
       if ! final_csv_basename="$(python3 "scripts/data/automation/filter_time_based.py" "$processed_dir" "$DEVICE_LOCATION" "$SCHEDULE_TYPE" "$RUN_INTERVAL")"; then
         log "[rachel][warn] RACHEL time-window filter failed. Continuing with other data stages."
