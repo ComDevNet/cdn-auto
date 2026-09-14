@@ -15,13 +15,20 @@ set -euo pipefail
 PROJECT_ROOT="${PROJECT_ROOT}"
 LOG_DIR="/var/log/v5_log_processor"
 LOG_FILE="\$LOG_DIR/automation.log"
+LOCK_FILE="/home/pi/cdn-auto/00_DATA/00_UPLOAD_QUEUE/.automation.lock"
 
-mkdir -p "\$LOG_DIR"
+mkdir -p "\$LOG_DIR" "\$(dirname "\$LOCK_FILE")"
 touch "\$LOG_FILE" || true
+
+echo "--- ${label} triggered at \$(date) ---" | tee -a "\$LOG_FILE"
+exec 9>"\$LOCK_FILE"
+if ! flock -w 900 9; then
+  echo "--- ${label} skipped at \$(date) (queue lock busy) ---" | tee -a "\$LOG_FILE"
+  exit 0
+fi
 
 cd "\$PROJECT_ROOT"
 find "\$PROJECT_ROOT/scripts" -name '*.sh' -exec sed -i 's/\\r\$//' {} + 2>/dev/null || true
-echo "--- ${label} triggered at \$(date) ---" | tee -a "\$LOG_FILE"
 set +e
 bash -lc 'set -o pipefail; ./scripts/data/automation/runner.sh ${mode} 2>&1 | tee -a "\$LOG_FILE"'
 rc=\${PIPESTATUS[0]}

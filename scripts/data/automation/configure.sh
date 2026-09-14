@@ -556,14 +556,20 @@ fi
 if systemctl list-unit-files "$DISPATCH_TIMER" >/dev/null 2>&1; then
   DROP_DIR="/etc/systemd/system/${DISPATCH_TIMER}.d"
   sudo mkdir -p "$DROP_DIR"
+  # Stagger dispatcher ~2 min after harvester so they rarely start together.
+  # Wrappers also share a flock so overlapping runs serialize on the queue.
+  DISPATCH_STAGGER_SEC=120
+  DISPATCH_BOOT_SEC=$((120 + DISPATCH_STAGGER_SEC))
   {
     echo "[Timer]"
     echo "OnCalendar="
     echo "OnUnitActiveSec="
+    echo "OnBootSec="
     if [[ "$UPLOAD_WINDOW" == "always" ]]; then
-      # Match harvest cadence for near-realtime / always-upload sites
+      echo "OnBootSec=${DISPATCH_BOOT_SEC}"
       echo "OnUnitActiveSec=${HARVEST_INTERVAL}"
     else
+      echo "OnBootSec=5min"
       echo "OnCalendar=hourly"
     fi
     echo "Persistent=true"
@@ -572,7 +578,7 @@ if systemctl list-unit-files "$DISPATCH_TIMER" >/dev/null 2>&1; then
   sudo systemctl enable "$DISPATCH_TIMER" >/dev/null
   sudo systemctl restart "$DISPATCH_TIMER"
   if [[ "$UPLOAD_WINDOW" == "always" ]]; then
-    say "⏱  Dispatcher timer: every ${HARVEST_INTERVAL}s, window '$UPLOAD_WINDOW' ($DISPATCH_TIMER)"
+    say "⏱  Dispatcher timer: every ${HARVEST_INTERVAL}s (+${DISPATCH_STAGGER_SEC}s stagger), window '$UPLOAD_WINDOW' ($DISPATCH_TIMER)"
   else
     say "⏱  Dispatcher timer: hourly checks, uploads only in window '$UPLOAD_WINDOW' ($DISPATCH_TIMER)"
   fi

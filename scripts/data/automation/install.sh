@@ -72,9 +72,19 @@ echo ""
 
 # --- Create Wrapper Scripts ---
 echo "📝 Creating executor scripts..."
+# Shared flock so harvest + dispatch never touch the queue at the same time.
+LOCK_FILE="/home/pi/cdn-auto/00_DATA/00_UPLOAD_QUEUE/.automation.lock"
+
 tee "$HARVEST_WRAPPER" > /dev/null << SCRIPT_EOF
 #!/bin/bash
+LOCK_FILE="$LOCK_FILE"
 echo "--- V5 Log Harvester triggered at \$(date) ---"
+mkdir -p "\$(dirname "\$LOCK_FILE")"
+exec 9>"\$LOCK_FILE"
+if ! flock -w 900 9; then
+  echo "--- V5 Harvester skipped at \$(date) (queue lock busy) ---"
+  exit 0
+fi
 cd "$PROJECT_ROOT"
 find "$PROJECT_ROOT/scripts" -name '*.sh' -exec sed -i 's/\r\$//' {} + 2>/dev/null || true
 ./scripts/data/automation/runner.sh harvest >> "$LOG_FILE" 2>&1
@@ -84,7 +94,14 @@ SCRIPT_EOF
 
 tee "$DISPATCH_WRAPPER" > /dev/null << SCRIPT_EOF
 #!/bin/bash
+LOCK_FILE="$LOCK_FILE"
 echo "--- V5 Log Dispatcher triggered at \$(date) ---"
+mkdir -p "\$(dirname "\$LOCK_FILE")"
+exec 9>"\$LOCK_FILE"
+if ! flock -w 900 9; then
+  echo "--- V5 Dispatcher skipped at \$(date) (queue lock busy) ---"
+  exit 0
+fi
 cd "$PROJECT_ROOT"
 find "$PROJECT_ROOT/scripts" -name '*.sh' -exec sed -i 's/\r\$//' {} + 2>/dev/null || true
 ./scripts/data/automation/runner.sh dispatch >> "$LOG_FILE" 2>&1
@@ -95,7 +112,14 @@ SCRIPT_EOF
 # Legacy alias: harvest then dispatch (manual escape hatch)
 tee "$LEGACY_WRAPPER" > /dev/null << SCRIPT_EOF
 #!/bin/bash
+LOCK_FILE="$LOCK_FILE"
 echo "--- V5 Log Processor (all) triggered at \$(date) ---"
+mkdir -p "\$(dirname "\$LOCK_FILE")"
+exec 9>"\$LOCK_FILE"
+if ! flock -w 900 9; then
+  echo "--- V5 Automation (all) skipped at \$(date) (queue lock busy) ---"
+  exit 0
+fi
 cd "$PROJECT_ROOT"
 find "$PROJECT_ROOT/scripts" -name '*.sh' -exec sed -i 's/\r\$//' {} + 2>/dev/null || true
 ./scripts/data/automation/runner.sh all >> "$LOG_FILE" 2>&1

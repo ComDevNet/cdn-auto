@@ -31,7 +31,9 @@ set_kv UPLOAD_WINDOW always
 mkdir -p /etc/systemd/system/v5-log-harvester.timer.d /etc/systemd/system/v5-log-dispatcher.timer.d
 printf '%s\n' '[Timer]' 'OnCalendar=' 'OnUnitActiveSec=' 'OnUnitActiveSec=900' 'Persistent=true' \
   >/etc/systemd/system/v5-log-harvester.timer.d/override.conf
-printf '%s\n' '[Timer]' 'OnCalendar=' 'OnUnitActiveSec=' 'OnUnitActiveSec=900' 'Persistent=true' \
+# Dispatcher starts ~2 min after harvester (OnBootSec) and shares a flock in wrappers.
+printf '%s\n' '[Timer]' 'OnCalendar=' 'OnUnitActiveSec=' 'OnBootSec=' 'OnBootSec=240' \
+  'OnUnitActiveSec=900' 'Persistent=true' \
   >/etc/systemd/system/v5-log-dispatcher.timer.d/override.conf
 
 systemctl daemon-reload
