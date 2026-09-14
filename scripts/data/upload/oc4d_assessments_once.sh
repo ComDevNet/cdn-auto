@@ -172,23 +172,9 @@ PY
 )))
 
 if (( ${#new_uploaded_ids[@]} > 0 )); then
-  python3 - "$OC4D_STATE_FILE" "${new_uploaded_ids[@]}" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-state_path = Path(sys.argv[1])
-ids = [item for item in sys.argv[2:] if item]
-uploaded = set()
-if state_path.exists():
-    try:
-        uploaded = set(json.loads(state_path.read_text(encoding="utf-8")).get("uploadedIds", []))
-    except json.JSONDecodeError:
-        uploaded = set()
-uploaded.update(ids)
-state_path.parent.mkdir(parents=True, exist_ok=True)
-state_path.write_text(json.dumps({"uploadedIds": sorted(uploaded)}, indent=2) + "\n", encoding="utf-8")
-PY
+  for rid in "${new_uploaded_ids[@]}"; do
+    record_oc4d_uploaded_id "$rid"
+  done
 fi
 
 log "OC4D assessment run complete."

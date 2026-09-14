@@ -294,7 +294,7 @@ pick_oc4d_parent_org() {
 }
 
 if [[ "$SERVER_VERSION" == "v2" || "$SERVER_VERSION" == "v6" ]]; then
-  if confirm_default "Also pull OC4D assessment results from the local OC4D API and upload to the OC4D reports bucket?" "$OC4D_ASSESSMENTS_ENABLED"; then
+  if confirm_default "Also pull OC4D assessment results from the local OC4D database and upload to the OC4D reports bucket?" "$OC4D_ASSESSMENTS_ENABLED"; then
     OC4D_ASSESSMENTS_ENABLED="1"
     OC4D_API_BASE_URL="http://127.0.0.1:3000"
     OC4D_API_TOKEN=""
@@ -302,7 +302,7 @@ if [[ "$SERVER_VERSION" == "v2" || "$SERVER_VERSION" == "v6" ]]; then
     OC4D_ASSESSMENT_MAP_FILE="${OC4D_ASSESSMENT_MAP_FILE:-$PROJECT_ROOT/config/oc4d/assessment-map.csv}"
     OC4D_SOURCE_DIR=""
     OC4D_UPLOAD_MODE="direct_s3"
-    say "OC4D API: ${OC4D_API_BASE_URL} (local; token auto-fetched at runtime)"
+    say "OC4D assessments: reads local Postgres (no admin password). API auth is fallback only."
     say "OC4D maps: ${OC4D_STUDENT_MAP_FILE} and ${OC4D_ASSESSMENT_MAP_FILE} (optional overrides; auto-mapped by default)"
     say "OC4D unmapped students upload to: ${OC4D_UNASSIGNED_STUDENT_ID} (assign in cloud /admin/students)"
     pick_oc4d_bucket
@@ -425,7 +425,7 @@ Upload window  : $UPLOAD_WINDOW
 ModuleGaze     : $([[ "$MODULEGAZE_ENABLED" == "1" ]] && echo enabled || echo disabled)
 ModuleGaze API : ${MODULEGAZE_API_BASE_URL:-http://127.0.0.1:3002}
 OC4D assessments: $([[ "$OC4D_ASSESSMENTS_ENABLED" == "1" ]] && echo enabled || echo disabled)
-OC4D API       : ${OC4D_API_BASE_URL:-http://127.0.0.1:3000} (auto-auth)
+OC4D source     : local Postgres (password-independent; API fallback)
 OC4D bucket    : ${OC4D_BUCKET:-oc4d-raw-reports}
 OC4D parentOrg : ${OC4D_PARENT_ORG:-Home-Schooling}
 Config file    : $CONFIG_FILE

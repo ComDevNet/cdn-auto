@@ -133,6 +133,34 @@ oc4d_sidecar_for_csv() {
   printf '%s.oc4dkey' "$1"
 }
 
+# Persist result_id only after a successful S3 upload (never at enqueue).
+record_oc4d_uploaded_id() {
+  local result_id="${1:-}"
+  local state_file="${OC4D_STATE_FILE:-}"
+  [[ -n "$result_id" && -n "$state_file" ]] || return 0
+  python3 - "$state_file" "$result_id" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+state_path = Path(sys.argv[1])
+rid = sys.argv[2].strip()
+if not rid:
+    raise SystemExit(0)
+uploaded = set()
+if state_path.exists():
+    try:
+        uploaded = set(json.loads(state_path.read_text(encoding="utf-8")).get("uploadedIds", []))
+    except json.JSONDecodeError:
+        uploaded = set()
+uploaded.add(rid)
+state_path.parent.mkdir(parents=True, exist_ok=True)
+tmp = state_path.with_suffix(".tmp")
+tmp.write_text(json.dumps({"uploadedIds": sorted(uploaded)}, indent=2) + "\n", encoding="utf-8")
+tmp.replace(state_path)
+PY
+}
+
 upload_oc4d_one() {
   local file_path="$1"
   local s3_key="$2"
@@ -161,7 +189,7 @@ queue_oc4d_one() {
   local queue_root="${2:?queue root required}"
   local s3_key="$3"
   local result_id="${4:-}"
-  local target_dir base sidecar tmp dest completed_dir uploading_dir state_file
+  local target_dir base sidecar tmp dest completed_dir uploading_dir
 
   if declare -F prepare_queue_dirs >/dev/null 2>&1; then
     prepare_queue_dirs "$queue_root"
@@ -179,8 +207,17 @@ queue_oc4d_one() {
   fi
   # Same S3 key already pending → skip (dedup across harvest reruns).
   if [[ -f "$dest" ]]; then
-    existing_key="$(tr -d '\r' < "$(oc4d_sidecar_for_csv "$dest")" 2>/dev/null | head -n1 || true)"
+    existing_key="$(tr -d '\r' < "$(oc4d_sidecar_for_csv "$dest")" 2>/dev/null | sed -n '1p' || true)"
     if [[ "$existing_key" == "$s3_key" ]]; then
+      # Refresh result_id on existing pending sidecars (needed after state-on-success change).
+      if [[ -n "$result_id" ]]; then
+        sidecar="$(oc4d_sidecar_for_csv "$dest")"
+        {
+          printf '%s\n' "$s3_key"
+          printf '%s\n' "$result_id"
+        } > "${sidecar}.tmp.$$"
+        mv -f "${sidecar}.tmp.$$" "$sidecar"
+      fi
       log "[oc4d][queue] Skip $base (identical key already pending)."
       return 0
     fi
@@ -190,38 +227,19 @@ queue_oc4d_one() {
   cp -f "$file_path" "$tmp"
   mv -f "$tmp" "$dest"
   sidecar="$(oc4d_sidecar_for_csv "$dest")"
-  printf '%s\n' "$s3_key" > "${sidecar}.tmp.$$"
+  # Line 1 = S3 key, line 2 = optional assessment result_id (recorded after upload success).
+  {
+    printf '%s\n' "$s3_key"
+    [[ -n "$result_id" ]] && printf '%s\n' "$result_id"
+  } > "${sidecar}.tmp.$$"
   mv -f "${sidecar}.tmp.$$" "$sidecar"
 
-  # ponytail: record result_id at enqueue so the next harvest does not re-emit; pending holds delivery truth
-  if [[ -n "$result_id" ]]; then
-    state_file="${OC4D_STATE_FILE:-}"
-    if [[ -n "$state_file" ]]; then
-      python3 - "$state_file" "$result_id" <<'PY'
-import json, sys
-from pathlib import Path
-state_path = Path(sys.argv[1])
-rid = sys.argv[2]
-uploaded = set()
-if state_path.exists():
-    try:
-        uploaded = set(json.loads(state_path.read_text(encoding="utf-8")).get("uploadedIds", []))
-    except json.JSONDecodeError:
-        uploaded = set()
-uploaded.add(rid)
-state_path.parent.mkdir(parents=True, exist_ok=True)
-tmp = state_path.with_suffix(".tmp")
-tmp.write_text(json.dumps({"uploadedIds": sorted(uploaded)}, indent=2) + "\n", encoding="utf-8")
-tmp.replace(state_path)
-PY
-    fi
-  fi
   log "[oc4d][queue] Queued $base (pending, key=$s3_key)"
 }
 
 flush_oc4d_queue() {
   local queue_root="${1:?queue root required}"
-  local queue_dir uploading_dir completed_dir failed=0 file active sidecar s3_key files=()
+  local queue_dir uploading_dir completed_dir failed=0 file active sidecar s3_key result_id files=()
 
   queue_dir="$(oc4d_queue_dir "$queue_root" "pending")"
   uploading_dir="$(oc4d_queue_dir "$queue_root" "uploading")"
@@ -254,8 +272,10 @@ flush_oc4d_queue() {
       active="$file"
     fi
     sidecar="$(oc4d_sidecar_for_csv "$active")"
-    s3_key="$(tr -d '\r' < "$sidecar" | head -n1)"
+    s3_key="$(tr -d '\r' < "$sidecar" | sed -n '1p')"
+    result_id="$(tr -d '\r' < "$sidecar" | sed -n '2p')"
     if upload_oc4d_one "$active" "$s3_key"; then
+      record_oc4d_uploaded_id "$result_id"
       if declare -F _queue_move_item >/dev/null 2>&1; then
         _queue_move_item "$active" "$completed_dir" >/dev/null || rm -f "$active" "$sidecar"
       else
@@ -277,7 +297,7 @@ resolve_oc4d_api_token() {
   local api_base="${OC4D_API_BASE_URL:-http://127.0.0.1:3000}"
   local token="${OC4D_API_TOKEN:-}"
   local identifier="${OC4D_API_IDENTIFIER:-admin@comdevnet.com}"
-  local password="${OC4D_API_PASSWORD:-CDN2025!}"
+  local password="${OC4D_API_PASSWORD:-}"
   local creds_file="${OC4D_API_CREDENTIALS_FILE:-}"
   local response
 
@@ -291,6 +311,11 @@ resolve_oc4d_api_token() {
     source "$creds_file"
     identifier="${OC4D_API_IDENTIFIER:-$identifier}"
     password="${OC4D_API_PASSWORD:-$password}"
+  fi
+
+  if [[ -z "$password" ]]; then
+    echo "no OC4D_API_PASSWORD set (DB harvest does not need it)" >&2
+    return 1
   fi
 
   if ! command -v curl >/dev/null 2>&1; then

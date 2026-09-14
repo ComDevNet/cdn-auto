@@ -10,6 +10,7 @@ import csv
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -708,7 +709,7 @@ def resolve_api_token(api_base: str, token: str) -> str:
         return token
 
     identifier = os.environ.get("OC4D_API_IDENTIFIER", "admin@comdevnet.com").strip()
-    password = os.environ.get("OC4D_API_PASSWORD", "CDN2025!").strip()
+    password = os.environ.get("OC4D_API_PASSWORD", "").strip()
     creds_file = os.environ.get("OC4D_API_CREDENTIALS_FILE", "").strip()
     if creds_file and Path(creds_file).is_file():
         for line in Path(creds_file).read_text(encoding="utf-8").splitlines():
@@ -722,6 +723,12 @@ def resolve_api_token(api_base: str, token: str) -> str:
                 identifier = value
             elif key == "OC4D_API_PASSWORD" and value:
                 password = value
+
+    if not password:
+        raise RuntimeError(
+            "Local OC4D API auth skipped: no OC4D_API_PASSWORD "
+            "(prefer local DB harvest via OC4D_DATABASE_URL / docker)"
+        )
 
     auth_url = f"{api_base.rstrip('/')}/api/authentication"
     payload = json.dumps({"identifier": identifier, "password": password}).encode("utf-8")
@@ -744,6 +751,332 @@ def resolve_api_token(api_base: str, token: str) -> str:
     if not access_token:
         raise RuntimeError("Local OC4D API auth did not return accessToken")
     return access_token
+
+
+def _read_env_file_value(path: Path, key: str) -> str:
+    if not path.is_file():
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        raw = line.strip()
+        if not raw or raw.startswith("#") or "=" not in raw:
+            continue
+        name, value = raw.split("=", 1)
+        if name.strip() != key:
+            continue
+        return value.strip().strip('"').strip("'")
+    return ""
+
+
+def resolve_database_url() -> str:
+    explicit = os.environ.get("OC4D_DATABASE_URL", "").strip()
+    if explicit:
+        return explicit
+
+    url_file = os.environ.get("OC4D_DATABASE_URL_FILE", "").strip()
+    candidates: list[Path] = []
+    if url_file:
+        candidates.append(Path(url_file))
+    project_root = Path(
+        os.environ.get("PROJECT_ROOT")
+        or Path(__file__).resolve().parents[4]
+    )
+    candidates.extend(
+        [
+            project_root / "config/oc4d/database.url",
+            project_root / "config/oc4d/.database.url",
+            Path("/home/pi/oc4d-server/workspaces/website/.env.local"),
+            Path("/home/pi/oc4d-server/.env"),
+            Path.home() / "oc4d-server/workspaces/website/.env.local",
+        ]
+    )
+    for path in candidates:
+        if path.name in {"database.url", ".database.url"}:
+            try:
+                value = path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+            except OSError:
+                value = ""
+            if value and not value.startswith("#"):
+                return value.splitlines()[0].strip()
+        else:
+            value = _read_env_file_value(path, "DATABASE_URL")
+            if value:
+                return value
+    return ""
+
+
+def resolve_db_docker_container() -> str:
+    return (
+        os.environ.get("OC4D_DB_DOCKER_CONTAINER", "").strip()
+        or os.environ.get("OC4D_POSTGRES_CONTAINER", "").strip()
+        or "oc4d_db"
+    )
+
+
+def _run_psql_query(sql: str) -> str:
+    """Run SQL against local OC4D Postgres (psql URL or docker exec)."""
+    database_url = resolve_database_url()
+    errors: list[str] = []
+
+    if database_url and shutil_which("psql"):
+        try:
+            completed = subprocess.run(
+                ["psql", database_url, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c", sql],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if completed.returncode == 0:
+                return completed.stdout.strip()
+            errors.append(f"psql: {completed.stderr.strip() or completed.stdout.strip()}")
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            errors.append(f"psql: {exc}")
+
+    container = resolve_db_docker_container()
+    docker_bin = shutil_which("docker") or shutil_which("sudo")
+    if docker_bin:
+        cmd: list[str]
+        # Prefer passwordless sudo docker when available (typical on Pi).
+        if shutil_which("sudo") and shutil_which("docker"):
+            cmd = [
+                "sudo",
+                "docker",
+                "exec",
+                container,
+                "psql",
+                "-U",
+                "postgres",
+                "-d",
+                "oc4d",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-t",
+                "-A",
+                "-c",
+                sql,
+            ]
+        elif shutil_which("docker"):
+            cmd = [
+                "docker",
+                "exec",
+                container,
+                "psql",
+                "-U",
+                "postgres",
+                "-d",
+                "oc4d",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-t",
+                "-A",
+                "-c",
+                sql,
+            ]
+        else:
+            cmd = []
+        if cmd:
+            try:
+                completed = subprocess.run(
+                    cmd,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if completed.returncode == 0:
+                    return completed.stdout.strip()
+                errors.append(
+                    f"docker:{container}: {completed.stderr.strip() or completed.stdout.strip()}"
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                errors.append(f"docker:{container}: {exc}")
+
+    detail = "; ".join(errors) if errors else "no psql client and no docker container access"
+    raise RuntimeError(f"Local OC4D database query failed: {detail}")
+
+
+def shutil_which(name: str) -> str | None:
+    from shutil import which
+
+    return which(name)
+
+
+def prune_assessment_staging(assessments_root: Path, keep: int | None = None) -> int:
+    """Keep the newest staging_* dirs; delete the rest so disk does not grow forever."""
+    if keep is None:
+        keep = int(os.environ.get("OC4D_STAGING_KEEP", "2"))
+    keep = max(0, int(keep))
+    dirs = sorted(
+        (path for path in assessments_root.glob("staging_*") if path.is_dir()),
+        key=lambda path: path.name,
+    )
+    if keep == 0:
+        victims = dirs
+    else:
+        victims = dirs[:-keep] if len(dirs) > keep else []
+    removed = 0
+    for path in victims:
+        try:
+            shutil.rmtree(path)
+            removed += 1
+        except OSError:
+            continue
+    if removed:
+        print(json.dumps({"source": "staging-prune", "removed": removed, "kept": keep}))
+    return removed
+
+
+def _fetch_db_results_page(start_literal: str, limit: int, offset: int) -> list[dict[str, Any]]:
+    results_sql = f"""
+SELECT COALESCE(json_agg(row_json ORDER BY sort_ts ASC, sort_id ASC), '[]'::json)
+FROM (
+  SELECT
+    ar.created_at AS sort_ts,
+    ar.id AS sort_id,
+    json_build_object(
+      'id', ar.id,
+      'assessmentId', ar.assessment_id,
+      'userId', ar.user_id,
+      'score', ar.score,
+      'passed', ar.passed,
+      'answers', ar.answers,
+      'createdAt', to_char(ar.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+      'assessment', json_build_object(
+        'id', a.id,
+        'title', a.title,
+        'module', CASE
+          WHEN m.id IS NULL THEN NULL
+          ELSE json_build_object(
+            'id', m.id,
+            'name', m.name,
+            'categories', COALESCE((
+              SELECT json_agg(json_build_object('id', c.id, 'name', c.name))
+              FROM "_CategoryToModule" ctm
+              JOIN "Category" c ON c.id = ctm."A"
+              WHERE ctm."B" = m.id
+            ), '[]'::json)
+          )
+        END
+      ),
+      'user', json_build_object(
+        'id', u.id,
+        'name', COALESCE(u.full_name, ''),
+        'email', COALESCE(u.email, ''),
+        'username', COALESCE(u.username, '')
+      )
+    ) AS row_json
+  FROM "AssessmentResult" ar
+  JOIN "Assessment" a ON a.id = ar.assessment_id
+  JOIN "User" u ON u.id = ar.user_id
+  LEFT JOIN "Module" m ON m.id = a.module_id
+  WHERE ar.created_at >= '{start_literal}'::timestamptz
+  ORDER BY ar.created_at ASC, ar.id ASC
+  LIMIT {limit}
+  OFFSET {offset}
+) ranked;
+"""
+    data_raw = _run_psql_query(results_sql)
+    try:
+        data = json.loads(data_raw or "[]")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Local OC4D database returned invalid JSON: {exc}") from exc
+    if not isinstance(data, list):
+        raise RuntimeError("Local OC4D database results must be a JSON array")
+    return [row for row in data if isinstance(row, dict)]
+
+
+def fetch_db_payload(take: int) -> dict[str, Any]:
+    """
+    Read assessment results directly from local Postgres.
+    Same JSON shape as /api/assessment-results — no admin password needed.
+    Paginates past a single-page ceiling so long outages still catch up.
+    """
+    start_date = (os.environ.get("OC4D_API_START_DATE") or "2020-01-01").strip() or "2020-01-01"
+    page_size = max(1, int(take))
+    max_results = max(page_size, int(os.environ.get("OC4D_API_MAX_RESULTS", "100000")))
+    start_literal = start_date.replace("'", "''")
+
+    data: list[dict[str, Any]] = []
+    offset = 0
+    truncated = False
+    while offset < max_results:
+        limit = min(page_size, max_results - offset)
+        batch = _fetch_db_results_page(start_literal, limit, offset)
+        data.extend(batch)
+        if len(batch) < limit:
+            break
+        offset += len(batch)
+        if offset >= max_results:
+            # One more probe: if another full page exists, we hit the safety cap.
+            probe = _fetch_db_results_page(start_literal, 1, offset)
+            truncated = bool(probe)
+            break
+
+    questions_sql = """
+SELECT COALESCE(json_object_agg(assessment_id, questions), '{}'::json)
+FROM (
+  SELECT
+    q.assessment_id AS assessment_id,
+    json_agg(
+      json_build_object(
+        'id', q.id,
+        'prompt', q.prompt,
+        'options', q.options,
+        'correctAnswerIndex', q.correct_answer_index,
+        'explanation', COALESCE(q.explanation, '')
+      )
+      ORDER BY q.created_at ASC, q.id ASC
+    ) AS questions
+  FROM "Question" q
+  GROUP BY q.assessment_id
+) grouped;
+"""
+    questions_raw = _run_psql_query(questions_sql)
+    try:
+        questions = json.loads(questions_raw or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Local OC4D database returned invalid JSON: {exc}") from exc
+    if not isinstance(questions, dict):
+        raise RuntimeError("Local OC4D database questions must be a JSON object")
+    payload: dict[str, Any] = {
+        "data": data,
+        "questionsByAssessmentId": questions,
+        "total": len(data),
+        "scope": "all",
+        "source": "database",
+        "pageSize": page_size,
+    }
+    if truncated:
+        payload["truncated"] = True
+        payload["maxResults"] = max_results
+        print(
+            json.dumps(
+                {
+                    "warn": f"DB fetch hit OC4D_API_MAX_RESULTS={max_results}; raise it to catch up",
+                    "source": "database",
+                    "fetched": len(data),
+                }
+            )
+        )
+    return payload
+
+
+def fetch_assessment_payload(api_base: str, token: str, take: int) -> tuple[dict[str, Any], str]:
+    """Prefer local DB (password-independent); fall back to API auth."""
+    prefer_api = (os.environ.get("OC4D_ASSESSMENT_SOURCE") or "").strip().lower() == "api"
+    if not prefer_api:
+        try:
+            payload = fetch_db_payload(take)
+            return payload, "database"
+        except RuntimeError as exc:
+            print(json.dumps({"warn": str(exc), "source": "database", "fallback": "api"}))
+
+    payload = fetch_api_payload(api_base, token, take)
+    return payload, "api"
 
 
 def fetch_api_payload(api_base: str, token: str, take: int) -> dict[str, Any]:
@@ -798,6 +1131,7 @@ def process_api_results(
     unassigned_student_id: str,
     staging_dir: Path,
     uploaded_ids: set[str],
+    source_label: str = "api",
 ) -> tuple[list[dict[str, Any]], set[str]]:
     results = payload.get("data") or []
     questions_by_assessment = payload.get("questionsByAssessmentId") or {}
@@ -914,7 +1248,7 @@ def process_api_results(
     print(
         json.dumps(
             {
-                "source": "api",
+                "source": source_label,
                 "counts": counts,
                 "entries": manifest_entries,
             }
@@ -1298,7 +1632,8 @@ def main() -> int:
             )
 
     try:
-        payload = fetch_api_payload(api_base, api_token, api_take)
+        payload, source_label = fetch_assessment_payload(api_base, api_token, api_take)
+        print(json.dumps({"source": source_label, "results": len(payload.get("data") or [])}))
         all_entries.extend(
             process_marking_schemes(
                 payload,
@@ -1316,16 +1651,18 @@ def main() -> int:
             unassigned_student_id=unassigned_student_id,
             staging_dir=staging_dir,
             uploaded_ids=uploaded_ids,
+            source_label=source_label,
         )
         all_entries.extend(api_entries)
     except RuntimeError as exc:
         if not source_dir:
             print(json.dumps({"error": str(exc), "counts": {"failed": 1}}))
             return 1
-        print(json.dumps({"warn": str(exc), "source": "api"}))
+        print(json.dumps({"warn": str(exc), "source": "assessment-fetch"}))
 
     manifest_path = write_manifest(staging_dir, all_entries)
     print(json.dumps({"manifest": str(manifest_path), "staging_dir": str(staging_dir)}))
+    prune_assessment_staging(assessments_root)
     ready_count = sum(1 for entry in all_entries if entry.get("status") == "ready")
     failed_count = sum(1 for entry in all_entries if entry.get("status") == "failed")
     if ready_count == 0 and failed_count > 0:
