@@ -345,20 +345,20 @@ RACHEL_SUBFOLDER="$(sanitize_subfolder "$RACHEL_SUBFOLDER")"
 
 # --- Data filter window (what rows go into each CSV) ---
 sched_opts=(
-  near_15  "Near-realtime every 15 min (rolling current bucket)"
-  near_30  "Near-realtime every 30 min (rolling current bucket)"
-  near_60  "Near-realtime every 60 min (rolling current bucket)"
-  daily   "Prior calendar day"
-  weekly  "Prior calendar week"
-  monthly "Prior calendar month"
-  yearly  "Prior calendar year"
-  custom  "Custom completed lookback (seconds)"
+  near_15  "Every 15 minutes"
+  near_30  "Every 30 minutes"
+  near_60  "Every hour"
+  daily   "Daily"
+  weekly  "Weekly"
+  monthly "Monthly"
+  yearly  "Yearly"
+  custom  "Custom (seconds)"
 )
 # If castle is selected, add prior-hour to the options
 if [[ "$PYTHON_SCRIPT" == "cape_coast_d" ]]; then
-  sched_opts=( hourly "Prior completed hour (Castle)" "${sched_opts[@]}" )
+  sched_opts=( hourly "Hourly (Castle)" "${sched_opts[@]}" )
 fi
-sched=$(menu_select "Choose data filter window (SCHEDULE_TYPE)" 18 74 10 "${sched_opts[@]}")
+sched=$(menu_select "How often should we send data?" 18 74 10 "${sched_opts[@]}")
 
 case "$sched" in
   near_15) SCHEDULE_TYPE="near_realtime"; RUN_INTERVAL="900"; HARVEST_INTERVAL="900"; UPLOAD_WINDOW="always" ;;
@@ -369,7 +369,7 @@ case "$sched" in
   weekly)  SCHEDULE_TYPE="weekly";  RUN_INTERVAL="604800" ;;
   monthly) SCHEDULE_TYPE="monthly"; RUN_INTERVAL="2592000" ;;
   yearly)  SCHEDULE_TYPE="yearly";  RUN_INTERVAL="31536000" ;;
-  custom)  SCHEDULE_TYPE="custom"; while :; do prompt_text "Custom interval in seconds (>=300)" "${RUN_INTERVAL}" RUN_INTERVAL; [[ "$RUN_INTERVAL" =~ ^[0-9]+$ ]] && (( RUN_INTERVAL >= 300 )) && break || say "Enter a number >= 300."; done ;;
+  custom)  SCHEDULE_TYPE="custom"; while :; do prompt_text "How many seconds between sends? (at least 300)" "${RUN_INTERVAL}" RUN_INTERVAL; [[ "$RUN_INTERVAL" =~ ^[0-9]+$ ]] && (( RUN_INTERVAL >= 300 )) && break || say "Enter a number of at least 300."; done ;;
 esac
 
 # --- Harvest interval (how often to collect while device is on) ---
