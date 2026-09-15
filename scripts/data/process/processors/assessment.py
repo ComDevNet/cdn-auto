@@ -538,6 +538,16 @@ def option_text_for_index(question: dict[str, Any], selected_index: int | None) 
     return str(options[selected_index])
 
 
+def question_prompt(question: dict[str, Any], index: int) -> str:
+    return str(
+        question.get("displayQuestion")
+        or question.get("sourceQuestion")
+        or question.get("question")
+        or question.get("prompt")
+        or f"Question {index + 1}"
+    ).strip()
+
+
 def selected_answer_for(answers: Any, question: dict[str, Any], question_index: int) -> str:
     selected_index: int | None = None
     raw_answer: Any = None
@@ -666,7 +676,7 @@ def write_result_csv(
 
     if questions:
         answer_headers = [
-            (q.get("prompt") or f"Question {idx + 1}").strip()
+            question_prompt(q, idx)
             for idx, q in enumerate(questions)
         ]
         answer_values = [
@@ -1042,9 +1052,28 @@ FROM (
         raise RuntimeError(f"Local OC4D database returned invalid JSON: {exc}") from exc
     if not isinstance(questions, dict):
         raise RuntimeError("Local OC4D database questions must be a JSON object")
+    rich_questions_sql = """
+SELECT COALESCE(json_object_agg(id, rich_questions), '{}'::json)
+FROM (
+  SELECT
+    a.id,
+    a.metadata->'richQuestions' AS rich_questions
+  FROM "Assessment" a
+  WHERE jsonb_typeof(a.metadata->'richQuestions') = 'array'
+    AND jsonb_array_length(a.metadata->'richQuestions') > 0
+) grouped;
+"""
+    rich_questions_raw = _run_psql_query(rich_questions_sql)
+    try:
+        rich_questions = json.loads(rich_questions_raw or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Local OC4D database rich questions returned invalid JSON: {exc}") from exc
+    if not isinstance(rich_questions, dict):
+        raise RuntimeError("Local OC4D database rich questions must be a JSON object")
     payload: dict[str, Any] = {
         "data": data,
         "questionsByAssessmentId": questions,
+        "richQuestionsByAssessmentId": rich_questions,
         "total": len(data),
         "scope": "all",
         "source": "database",
@@ -1135,6 +1164,7 @@ def process_api_results(
 ) -> tuple[list[dict[str, Any]], set[str]]:
     results = payload.get("data") or []
     questions_by_assessment = payload.get("questionsByAssessmentId") or {}
+    rich_questions_by_assessment = payload.get("richQuestionsByAssessmentId") or {}
     if not isinstance(results, list):
         raise ValueError("API payload field 'data' must be an array")
 
@@ -1190,7 +1220,11 @@ def process_api_results(
                 assessment_title=assessment_title,
             )
             parent_org = assessment_parent or parent_org
-            questions = questions_by_assessment.get(assessment_id_local) or []
+            questions = (
+                rich_questions_by_assessment.get(assessment_id_local)
+                or questions_by_assessment.get(assessment_id_local)
+                or []
+            )
             if not isinstance(questions, list):
                 questions = []
 
@@ -1355,6 +1389,14 @@ def process_source_dir(
 
 
 def pi_correct_answer(question: dict[str, Any]) -> str:
+    correct_answers = question.get("correctAnswers")
+    if isinstance(correct_answers, list):
+        values = [str(answer).strip() for answer in correct_answers if str(answer).strip()]
+        if values:
+            return "; ".join(values)
+    raw_answer = str(question.get("rawAnswer") or "").strip()
+    if raw_answer and raw_answer not in {"-", ".", "—"}:
+        return raw_answer
     options = question.get("options") or []
     idx = question.get("correctAnswerIndex")
     if isinstance(idx, int) and isinstance(options, list) and 0 <= idx < len(options):
@@ -1389,12 +1431,14 @@ def write_subject_meta_json(
     subject_name: str,
     module_name: str = "",
     assessment_name: str = "",
+    questions: list[dict[str, Any]] | None = None,
 ) -> None:
     payload = {
         "subjectName": subject_name,
         "moduleName": module_name,
         "assessmentName": assessment_name,
         "source": "pi-sync",
+        "questions": questions or [],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -1404,7 +1448,7 @@ def write_marking_scheme_csv(path: Path, questions: list[dict[str, Any]]) -> Non
     headers: list[str] = []
     answers: list[str] = []
     for idx, question in enumerate(questions):
-        prompt = str(question.get("prompt") or "").strip() or f"Question {idx + 1}"
+        prompt = question_prompt(question, idx)
         headers.append(prompt)
         answers.append(pi_correct_answer(question))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1423,8 +1467,11 @@ def process_marking_schemes(
     staging_dir: Path,
 ) -> list[dict[str, Any]]:
     questions_by_assessment = payload.get("questionsByAssessmentId") or {}
+    rich_questions_by_assessment = payload.get("richQuestionsByAssessmentId") or {}
     results = payload.get("data") or []
-    if not isinstance(questions_by_assessment, dict):
+    if not isinstance(questions_by_assessment, dict) or not isinstance(
+        rich_questions_by_assessment, dict
+    ):
         print(
             json.dumps(
                 {
@@ -1458,7 +1505,9 @@ def process_marking_schemes(
     manifest_entries: list[dict[str, Any]] = []
     counts = {"ready": 0, "failed": 0}
 
-    for pi_assessment_id, questions in questions_by_assessment.items():
+    all_question_sets = dict(questions_by_assessment)
+    all_question_sets.update(rich_questions_by_assessment)
+    for pi_assessment_id, questions in all_question_sets.items():
         if not isinstance(questions, list) or not questions:
             continue
         assessment_title = title_by_pi_id.get(pi_assessment_id, pi_assessment_id)
@@ -1480,6 +1529,7 @@ def process_marking_schemes(
                 subject_name=subject_name,
                 module_name=module_name,
                 assessment_name=assessment_title,
+                questions=questions,
             )
             scheme_prefix = (
                 f"{normalize_key_segment(parent_org)}/MarkingSchemes/"
