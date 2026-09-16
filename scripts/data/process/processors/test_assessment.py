@@ -8,6 +8,92 @@ import assessment
 
 
 class AssessmentAnswerSyncTests(unittest.TestCase):
+    def test_same_named_assessments_with_identical_questions_share_scheme(self):
+        payload = {
+            "assessmentsById": {
+                "standalone-id": {"title": "Faith"},
+                "module-id": {"title": "Faith"},
+            },
+            "questionsByAssessmentId": {
+                "standalone-id": [{"id": "a-1", "prompt": "What is faith?", "options": ["A", "B"]}],
+                "module-id": [{"id": "b-9", "prompt": "What is faith?", "options": ["A", "B"]}],
+            },
+            "richQuestionsByAssessmentId": {},
+            "data": [],
+        }
+
+        resolved = assessment.automatic_assessment_id_map(payload, {}, "Example Org")
+
+        self.assertEqual(resolved["standalone-id"], "faith")
+        self.assertEqual(resolved["module-id"], "faith")
+
+    def test_same_named_assessments_with_different_questions_get_separate_schemes(self):
+        payload = {
+            "assessmentsById": {
+                "old-standalone": {"title": "Faith"},
+                "new-module": {"title": "Faith"},
+            },
+            "questionsByAssessmentId": {
+                "old-standalone": [{"id": "q1", "prompt": "What is faith?"}],
+                "new-module": [{"id": "q1", "prompt": "Who demonstrated faith?"}],
+            },
+            "richQuestionsByAssessmentId": {},
+            "data": [
+                {"assessmentId": "new-module", "createdAt": "2026-09-16T12:00:00Z"},
+                {"assessmentId": "old-standalone", "createdAt": "2026-09-01T12:00:00Z"},
+            ],
+        }
+
+        resolved = assessment.automatic_assessment_id_map(payload, {}, "Example Org")
+
+        self.assertEqual(resolved["old-standalone"], "faith")
+        self.assertRegex(resolved["new-module"], r"^faith-[0-9a-f]{8}$")
+        self.assertNotEqual(resolved["new-module"], resolved["old-standalone"])
+
+    def test_title_mapping_is_split_when_same_name_has_different_questions(self):
+        payload = {
+            "assessmentsById": {
+                "source-a": {"title": "Faith"},
+                "source-b": {"title": "Faith"},
+            },
+            "questionsByAssessmentId": {
+                "source-a": [{"prompt": "Question A"}],
+                "source-b": [{"prompt": "Question B"}],
+            },
+            "richQuestionsByAssessmentId": {},
+            "data": [
+                {"assessmentId": "source-a", "createdAt": "2026-01-01T00:00:00Z"},
+                {"assessmentId": "source-b", "createdAt": "2026-02-01T00:00:00Z"},
+            ],
+        }
+        mapping = {
+            "faith": {
+                "source_assessment_name": "Faith",
+                "assessmentId": "faith-custom",
+                "parentOrg": "Example Org",
+            }
+        }
+
+        resolved = assessment.automatic_assessment_id_map(payload, mapping, "Default Org")
+        first = assessment.resolve_assessment_mapping(
+            mapping,
+            "Default Org",
+            assessment_id="source-a",
+            assessment_title="Faith",
+            automatic_assessment_ids=resolved,
+        )
+        second = assessment.resolve_assessment_mapping(
+            mapping,
+            "Default Org",
+            assessment_id="source-b",
+            assessment_title="Faith",
+            automatic_assessment_ids=resolved,
+        )
+
+        self.assertEqual(first, ("faith-custom", "Example Org", True))
+        self.assertRegex(second[0], r"^faith-custom-[0-9a-f]{8}$")
+        self.assertEqual(second[1], "Example Org")
+
     def test_keeps_rich_review_answers_without_numeric_selected_index(self):
         answers = {
             "review": [

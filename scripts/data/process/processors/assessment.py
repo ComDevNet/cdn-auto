@@ -7,6 +7,7 @@ mapping files, validate CSV shape, and emit upload-ready artifacts plus manifest
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 import re
@@ -487,14 +488,31 @@ def resolve_assessment_mapping(
     *,
     assessment_id: str = "",
     assessment_title: str = "",
+    automatic_assessment_ids: dict[str, str] | None = None,
 ) -> tuple[str, str, bool]:
-    candidates = [
+    source_candidates = [
         assessment_id.strip().lower(),
         assessment_id.strip(),
+    ]
+    title_candidates = [
         assessment_title.strip().lower(),
         assessment_title.strip(),
     ]
-    for candidate in candidates:
+    for candidate in source_candidates:
+        if candidate and candidate in assessment_index:
+            row = assessment_index[candidate]
+            parent_org = row.get("parentOrg") or default_parent_org
+            return row["assessmentId"], parent_org, False
+
+    generated_id = (automatic_assessment_ids or {}).get(assessment_id.strip())
+    if generated_id:
+        for candidate in title_candidates:
+            if candidate and candidate in assessment_index:
+                row = assessment_index[candidate]
+                return generated_id, row.get("parentOrg") or default_parent_org, True
+        return generated_id, "", True
+
+    for candidate in title_candidates:
         if candidate and candidate in assessment_index:
             row = assessment_index[candidate]
             parent_org = row.get("parentOrg") or default_parent_org
@@ -505,6 +523,138 @@ def resolve_assessment_mapping(
     # An automatic assessment id must not force a result into the global/default
     # organisation. The caller can retain the student's resolved organisation.
     return generated_id, "", True
+
+
+QUESTION_IDENTITY_KEYS = {
+    "id",
+    "assessmentId",
+    "sourceAssessmentId",
+    "questionId",
+    "createdAt",
+    "updatedAt",
+    "order",
+}
+
+
+def canonical_question_content(value: Any) -> Any:
+    """Remove record identity fields while retaining question meaning and order."""
+    if isinstance(value, list):
+        return [canonical_question_content(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: canonical_question_content(item)
+            for key, item in sorted(value.items())
+            if key not in QUESTION_IDENTITY_KEYS
+        }
+    return value
+
+
+def question_set_fingerprint(questions: list[dict[str, Any]]) -> str:
+    encoded = json.dumps(
+        canonical_question_content(questions),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def automatic_assessment_id_map(
+    payload: dict[str, Any],
+    assessment_index: dict[str, dict[str, str]],
+    default_parent_org: str,
+) -> dict[str, str]:
+    """Allocate stable cloud IDs for unmapped, same-named assessments.
+
+    The question set with the oldest result keeps the historical title slug. Other
+    distinct question sets receive a content-hash suffix. Identical question sets
+    deliberately share the same ID and marking scheme.
+    """
+    legacy_by_id = payload.get("questionsByAssessmentId") or {}
+    rich_by_id = payload.get("richQuestionsByAssessmentId") or {}
+    assessments_by_id = payload.get("assessmentsById") or {}
+    results = payload.get("data") or []
+    if not isinstance(legacy_by_id, dict) or not isinstance(rich_by_id, dict):
+        return {}
+
+    title_by_id: dict[str, str] = {}
+    if isinstance(assessments_by_id, dict):
+        for source_id, raw in assessments_by_id.items():
+            if isinstance(raw, dict):
+                title_by_id[str(source_id)] = str(raw.get("title") or "").strip()
+
+    oldest_by_id: dict[str, str] = {}
+    if isinstance(results, list):
+        for raw_result in results:
+            if not isinstance(raw_result, dict):
+                continue
+            raw_assessment = raw_result.get("assessment") or {}
+            if not isinstance(raw_assessment, dict):
+                raw_assessment = {}
+            source_id = str(
+                raw_result.get("assessmentId") or raw_assessment.get("id") or ""
+            ).strip()
+            if not source_id:
+                continue
+            title = str(raw_assessment.get("title") or "").strip()
+            if title and not title_by_id.get(source_id):
+                title_by_id[source_id] = title
+            created_at = str(raw_result.get("createdAt") or "").strip()
+            if created_at and (
+                source_id not in oldest_by_id or created_at < oldest_by_id[source_id]
+            ):
+                oldest_by_id[source_id] = created_at
+
+    source_ids = {str(value) for value in legacy_by_id} | {
+        str(value) for value in rich_by_id
+    }
+    groups: dict[str, list[tuple[str, str, str]]] = {}
+    for source_id in source_ids:
+        title = title_by_id.get(source_id, source_id)
+        direct_row = assessment_index.get(source_id.strip().lower()) or assessment_index.get(
+            source_id.strip()
+        )
+        if direct_row:
+            continue
+        title_row = assessment_index.get(title.strip().lower()) or assessment_index.get(
+            title.strip()
+        )
+        questions = merge_question_definitions(
+            rich_by_id.get(source_id), legacy_by_id.get(source_id)
+        )
+        if not questions:
+            continue
+        base_id = (
+            str(title_row.get("assessmentId") or "").strip()
+            if title_row
+            else safe_base_name(title, safe_base_name(source_id, "assessment"))
+        )
+        base_id = safe_base_name(base_id, safe_base_name(title, "assessment"))
+        groups.setdefault(base_id, []).append(
+            (source_id, question_set_fingerprint(questions), oldest_by_id.get(source_id, ""))
+        )
+
+    resolved: dict[str, str] = {}
+    for base_id, entries in groups.items():
+        fingerprints: dict[str, list[tuple[str, str]]] = {}
+        for source_id, fingerprint, oldest in entries:
+            fingerprints.setdefault(fingerprint, []).append((source_id, oldest))
+        if len(fingerprints) == 1:
+            for source_id, _oldest in next(iter(fingerprints.values())):
+                resolved[source_id] = base_id
+            continue
+
+        def fingerprint_age(item: tuple[str, list[tuple[str, str]]]) -> tuple[str, str]:
+            fingerprint, sources = item
+            dated = sorted(oldest for _source_id, oldest in sources if oldest)
+            return (dated[0] if dated else "9999-12-31T23:59:59Z", fingerprint)
+
+        base_fingerprint = min(fingerprints.items(), key=fingerprint_age)[0]
+        for fingerprint, sources in fingerprints.items():
+            cloud_id = base_id if fingerprint == base_fingerprint else f"{base_id}-{fingerprint[:8]}"
+            for source_id, _oldest in sources:
+                resolved[source_id] = cloud_id
+    return resolved
 
 
 def parse_created_at(value: Any) -> str:
@@ -1226,6 +1376,7 @@ def process_api_results(
     student_index: dict[str, dict[str, str]],
     cloud_student_ids: dict[str, str],
     assessment_index: dict[str, dict[str, str]],
+    automatic_assessment_ids: dict[str, str],
     default_parent_org: str,
     unassigned_student_id: str,
     staging_dir: Path,
@@ -1288,6 +1439,7 @@ def process_api_results(
                 default_parent_org,
                 assessment_id=assessment_id_local,
                 assessment_title=assessment_title,
+                automatic_assessment_ids=automatic_assessment_ids,
             )
             parent_org = assessment_parent or parent_org
             questions = merge_question_definitions(
@@ -1538,6 +1690,7 @@ def process_marking_schemes(
     student_index: dict[str, dict[str, str]],
     cloud_student_ids: dict[str, str],
     assessment_index: dict[str, dict[str, str]],
+    automatic_assessment_ids: dict[str, str],
     default_parent_org: str,
     unassigned_student_id: str,
     staging_dir: Path,
@@ -1623,6 +1776,7 @@ def process_marking_schemes(
                 default_parent_org,
                 assessment_id=pi_assessment_id,
                 assessment_title=assessment_title,
+                automatic_assessment_ids=automatic_assessment_ids,
             )
             target_orgs = (
                 [mapped_parent_org]
@@ -1814,12 +1968,16 @@ def main() -> int:
     try:
         payload, source_label = fetch_assessment_payload(api_base, api_token, api_take)
         print(json.dumps({"source": source_label, "results": len(payload.get("data") or [])}))
+        automatic_assessment_ids = automatic_assessment_id_map(
+            payload, assessment_index, default_parent_org
+        )
         all_entries.extend(
             process_marking_schemes(
                 payload,
                 student_index=student_index,
                 cloud_student_ids=cloud_student_ids,
                 assessment_index=assessment_index,
+                automatic_assessment_ids=automatic_assessment_ids,
                 default_parent_org=default_parent_org,
                 unassigned_student_id=unassigned_student_id,
                 staging_dir=staging_dir,
@@ -1830,6 +1988,7 @@ def main() -> int:
             student_index=student_index,
             cloud_student_ids=cloud_student_ids,
             assessment_index=assessment_index,
+            automatic_assessment_ids=automatic_assessment_ids,
             default_parent_org=default_parent_org,
             unassigned_student_id=unassigned_student_id,
             staging_dir=staging_dir,
