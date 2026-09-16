@@ -122,6 +122,39 @@ else
   pass=$((pass + 1))
 fi
 
+log "=== OC4D marking-scheme refresh and upload order ==="
+SCHEME_KEY="Testing/MarkingSchemes/faith-quiz/pi-sync-marking-scheme.csv"
+SCHEME_SRC="$TEST_ROOT/marking-scheme.csv"
+SCHEME_COMPLETED="$QUEUE_DIR/OC4DAssessments/completed"
+SCHEME_PENDING="$QUEUE_DIR/OC4DAssessments/pending"
+echo scheme-v1 > "$SCHEME_SRC"
+cp "$SCHEME_SRC" "$SCHEME_COMPLETED/marking-scheme.csv"
+printf '%s\n' "$SCHEME_KEY" > "$SCHEME_COMPLETED/marking-scheme.csv.oc4dkey"
+queue_oc4d_one "$SCHEME_SRC" "$QUEUE_DIR" "$SCHEME_KEY"
+assert_true "legacy completed scheme queued for one-time refresh" test -f "$SCHEME_PENDING/marking-scheme.csv"
+assert_eq "$(sed -n '3p' "$SCHEME_PENDING/marking-scheme.csv.oc4dkey")" \
+  "$OC4D_SCHEME_DELIVERY_VERSION" "scheme delivery version recorded"
+_queue_move_item "$SCHEME_PENDING/marking-scheme.csv" "$SCHEME_COMPLETED" >/dev/null
+queue_oc4d_one "$SCHEME_SRC" "$QUEUE_DIR" "$SCHEME_KEY"
+assert_false "current unchanged scheme remains deduplicated" test -f "$SCHEME_PENDING/marking-scheme.csv"
+echo scheme-v2 > "$SCHEME_SRC"
+queue_oc4d_one "$SCHEME_SRC" "$QUEUE_DIR" "$SCHEME_KEY"
+assert_eq "$(cat "$SCHEME_PENDING/marking-scheme.csv")" "scheme-v2" "changed scheme replaces completed version"
+
+ORDER_QUEUE="$TEST_ROOT/order-queue"
+prepare_queue_dirs "$ORDER_QUEUE"
+META_SRC="$TEST_ROOT/marking-scheme.subject.json"
+echo '{"questions":[]}' > "$META_SRC"
+queue_oc4d_one "$META_SRC" "$ORDER_QUEUE" \
+  "Testing/MarkingSchemes/faith-quiz/pi-sync-subject.json"
+queue_oc4d_one "$SCHEME_SRC" "$ORDER_QUEUE" "$SCHEME_KEY"
+UPLOAD_LOG="$TEST_ROOT/upload-order.txt"
+upload_oc4d_one() { basename "$1" >> "$UPLOAD_LOG"; }
+record_oc4d_uploaded_id() { :; }
+flush_oc4d_queue "$ORDER_QUEUE"
+assert_eq "$(sed -n '1p' "$UPLOAD_LOG")" "marking-scheme.subject.json" "rich metadata uploads first"
+assert_eq "$(sed -n '2p' "$UPLOAD_LOG")" "marking-scheme.csv" "scheme CSV uploads after metadata"
+
 rm -rf "$TEST_ROOT"
 log "=== Results: $pass passed, $fail failed ==="
 if (( fail > 0 )); then

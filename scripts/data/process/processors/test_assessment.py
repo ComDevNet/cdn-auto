@@ -111,14 +111,14 @@ class AssessmentAnswerSyncTests(unittest.TestCase):
             ],
         )
 
-    def test_old_state_is_reprocessed_once_for_the_new_result_format(self):
+    def test_old_state_ids_are_preserved_during_format_upgrade(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "state.json"
             path.write_text(json.dumps({"uploadedIds": ["old-result"]}), encoding="utf-8")
-            self.assertEqual(assessment.load_state(path), set())
+            self.assertEqual(assessment.load_state(path), {"old-result"})
 
-            assessment.save_state(path, {"new-result"})
-            self.assertEqual(assessment.load_state(path), {"new-result"})
+            assessment.save_state(path, {"old-result", "new-result"})
+            self.assertEqual(assessment.load_state(path), {"old-result", "new-result"})
             payload = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(payload["formatVersion"], assessment.RESULT_FORMAT_VERSION)
 

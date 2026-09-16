@@ -745,8 +745,6 @@ def load_state(path: Path) -> set[str]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return set()
-    if payload.get("formatVersion") != RESULT_FORMAT_VERSION:
-        return set()
     uploaded = payload.get("uploadedIds") or []
     return {str(item) for item in uploaded}
 

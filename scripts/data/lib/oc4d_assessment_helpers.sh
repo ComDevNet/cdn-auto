@@ -5,6 +5,11 @@ if ! declare -f log >/dev/null 2>&1; then
   log() { echo "[oc4d] $*"; }
 fi
 
+# Bump when completed marking schemes must be delivered again. The version is
+# stored on line 3 of the queue sidecar so old completed files are refreshed
+# once without repeatedly uploading unchanged schemes on every run.
+OC4D_SCHEME_DELIVERY_VERSION="${OC4D_SCHEME_DELIVERY_VERSION:-2}"
+
 oc4d_sanitize_key_segment() {
   local value="${1:-}"
   value="$(printf '%s' "$value" | tr -d '\r\n')"
@@ -152,8 +157,7 @@ uploaded = set()
 if state_path.exists():
     try:
         payload = json.loads(state_path.read_text(encoding="utf-8"))
-        if payload.get("formatVersion") == FORMAT_VERSION:
-            uploaded = set(payload.get("uploadedIds", []))
+        uploaded = set(payload.get("uploadedIds", []))
     except json.JSONDecodeError:
         uploaded = set()
 uploaded.add(rid)
@@ -200,6 +204,7 @@ queue_oc4d_one() {
   local s3_key="$3"
   local result_id="${4:-}"
   local target_dir base sidecar tmp dest completed_dir uploading_dir
+  local existing existing_key existing_version required_version=""
 
   if declare -F prepare_queue_dirs >/dev/null 2>&1; then
     prepare_queue_dirs "$queue_root"
@@ -211,20 +216,38 @@ queue_oc4d_one() {
   completed_dir="$(oc4d_queue_dir "$queue_root" "completed")"
   uploading_dir="$(oc4d_queue_dir "$queue_root" "uploading")"
 
-  if [[ -f "$completed_dir/$base" || -f "$uploading_dir/$base" ]]; then
-    log "[oc4d][queue] Skip $base (already completed/uploading)."
-    return 0
+  if [[ "$s3_key" == */MarkingSchemes/* ]]; then
+    required_version="$OC4D_SCHEME_DELIVERY_VERSION"
   fi
-  # Same S3 key already pending → skip (dedup across harvest reruns).
+
+  # Skip only when the completed/uploading payload, key, and delivery version
+  # are all current. A stable filename must not permanently hide richer scheme
+  # content produced by a later harvest.
+  for existing in "$uploading_dir/$base" "$completed_dir/$base"; do
+    [[ -f "$existing" ]] || continue
+    sidecar="$(oc4d_sidecar_for_csv "$existing")"
+    existing_key="$(tr -d '\r' < "$sidecar" 2>/dev/null | sed -n '1p' || true)"
+    existing_version="$(tr -d '\r' < "$sidecar" 2>/dev/null | sed -n '3p' || true)"
+    if cmp -s "$file_path" "$existing" && [[ "$existing_key" == "$s3_key" ]] &&
+      { [[ -z "$required_version" ]] || [[ "$existing_version" == "$required_version" ]]; }; then
+      log "[oc4d][queue] Skip $base (identical payload already completed/uploading)."
+      return 0
+    fi
+  done
+
+  # Same payload and S3 key already pending → skip (dedup across harvest reruns).
   if [[ -f "$dest" ]]; then
     existing_key="$(tr -d '\r' < "$(oc4d_sidecar_for_csv "$dest")" 2>/dev/null | sed -n '1p' || true)"
-    if [[ "$existing_key" == "$s3_key" ]]; then
+    existing_version="$(tr -d '\r' < "$(oc4d_sidecar_for_csv "$dest")" 2>/dev/null | sed -n '3p' || true)"
+    if cmp -s "$file_path" "$dest" && [[ "$existing_key" == "$s3_key" ]] &&
+      { [[ -z "$required_version" ]] || [[ "$existing_version" == "$required_version" ]]; }; then
       # Refresh result_id on existing pending sidecars (needed after state-on-success change).
       if [[ -n "$result_id" ]]; then
         sidecar="$(oc4d_sidecar_for_csv "$dest")"
         {
           printf '%s\n' "$s3_key"
           printf '%s\n' "$result_id"
+          [[ -n "$required_version" ]] && printf '%s\n' "$required_version"
         } > "${sidecar}.tmp.$$"
         mv -f "${sidecar}.tmp.$$" "$sidecar"
       fi
@@ -241,6 +264,10 @@ queue_oc4d_one() {
   {
     printf '%s\n' "$s3_key"
     [[ -n "$result_id" ]] && printf '%s\n' "$result_id"
+    if [[ -n "$required_version" ]]; then
+      [[ -n "$result_id" ]] || printf '\n'
+      printf '%s\n' "$required_version"
+    fi
   } > "${sidecar}.tmp.$$"
   mv -f "${sidecar}.tmp.$$" "$sidecar"
 
@@ -259,7 +286,10 @@ flush_oc4d_queue() {
 
   shopt -s nullglob
   # Marking schemes may be queued as .csv or .json with a matching .oc4dkey sidecar.
-  files=("$queue_dir"/*.csv "$queue_dir"/*.json)
+  # Rich metadata must be present before its CSV triggers scheme ingestion.
+  # The cloud handler also reprocesses on metadata arrival, making this robust
+  # if external delivery ever reverses the order.
+  files=("$queue_dir"/*.json "$queue_dir"/*.csv)
   shopt -u nullglob
 
   if (( ${#files[@]} == 0 )); then
