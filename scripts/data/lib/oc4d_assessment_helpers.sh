@@ -143,6 +143,7 @@ import json
 import sys
 from pathlib import Path
 
+FORMAT_VERSION = 2
 state_path = Path(sys.argv[1])
 rid = sys.argv[2].strip()
 if not rid:
@@ -150,13 +151,22 @@ if not rid:
 uploaded = set()
 if state_path.exists():
     try:
-        uploaded = set(json.loads(state_path.read_text(encoding="utf-8")).get("uploadedIds", []))
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        if payload.get("formatVersion") == FORMAT_VERSION:
+            uploaded = set(payload.get("uploadedIds", []))
     except json.JSONDecodeError:
         uploaded = set()
 uploaded.add(rid)
 state_path.parent.mkdir(parents=True, exist_ok=True)
 tmp = state_path.with_suffix(".tmp")
-tmp.write_text(json.dumps({"uploadedIds": sorted(uploaded)}, indent=2) + "\n", encoding="utf-8")
+tmp.write_text(
+    json.dumps(
+        {"formatVersion": FORMAT_VERSION, "uploadedIds": sorted(uploaded)},
+        indent=2,
+    )
+    + "\n",
+    encoding="utf-8",
+)
 tmp.replace(state_path)
 PY
 }

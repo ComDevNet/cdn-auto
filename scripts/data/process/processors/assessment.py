@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import Any
 
 
+RESULT_FORMAT_VERSION = 2
+
+
 REQUIRED_KEY_PATTERN = re.compile(
     r"^[^/]+/Assessments/[^/]+/[^/]+/[^/]+__[^/]+\.csv$"
 )
@@ -563,22 +566,36 @@ def selected_answer_for(answers: Any, question: dict[str, Any], question_index: 
             if isinstance(item, dict):
                 raw = item.get("selectedIndex")
                 selected_index = raw if isinstance(raw, int) else None
-                raw_answer = (
-                    item.get("selectedAnswer")
-                    or item.get("answer")
-                    or item.get("value")
-                    or raw
-                )
+                for key in ("selectedAnswer", "answer", "value"):
+                    candidate = item.get(key)
+                    if candidate is not None and str(candidate).strip():
+                        raw_answer = candidate
+                        break
+                if raw_answer is None:
+                    raw_answer = raw
             else:
                 raw_answer = item
-        if selected_index is None:
+        if raw_answer is None or (isinstance(raw_answer, str) and not raw_answer.strip()):
             selections = answers.get("selections")
             if isinstance(selections, dict):
-                raw = selections.get(question.get("id")) or selections.get(str(question_index))
+                raw = None
+                for key in (
+                    question.get("id"),
+                    str(question_index),
+                    str(question_index + 1),
+                    f"q{question.get('order')}",
+                ):
+                    if key is not None and key in selections:
+                        raw = selections[key]
+                        break
                 selected_index = raw if isinstance(raw, int) else None
                 raw_answer = raw
             else:
-                raw = answers.get(question.get("id")) or answers.get(str(question_index))
+                raw = None
+                for key in (question.get("id"), str(question_index), str(question_index + 1)):
+                    if key is not None and key in answers:
+                        raw = answers[key]
+                        break
                 selected_index = raw if isinstance(raw, int) else None
                 raw_answer = raw
 
@@ -596,6 +613,28 @@ def unique_headers(headers: list[str]) -> list[str]:
         seen[key] = count
         unique.append(base if count == 1 else f"{base} {count}")
     return unique
+
+
+def merge_question_definitions(
+    rich_questions: Any,
+    stored_questions: Any,
+) -> list[dict[str, Any]]:
+    rich = rich_questions if isinstance(rich_questions, list) else []
+    stored = stored_questions if isinstance(stored_questions, list) else []
+    if not rich:
+        return [item for item in stored if isinstance(item, dict)]
+
+    merged: list[dict[str, Any]] = []
+    for index in range(max(len(rich), len(stored))):
+        base = stored[index] if index < len(stored) and isinstance(stored[index], dict) else {}
+        rich_question = rich[index] if index < len(rich) else {}
+        details = rich_question if isinstance(rich_question, dict) else {}
+        question = {**base, **details}
+        choices = details.get("choices")
+        if isinstance(choices, list) and choices:
+            question["options"] = choices
+        merged.append(question)
+    return merged
 
 
 def fallback_answer_columns(answers: Any) -> tuple[list[str], list[str]]:
@@ -706,13 +745,18 @@ def load_state(path: Path) -> set[str]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return set()
+    if payload.get("formatVersion") != RESULT_FORMAT_VERSION:
+        return set()
     uploaded = payload.get("uploadedIds") or []
     return {str(item) for item in uploaded}
 
 
 def save_state(path: Path, uploaded_ids: set[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"uploadedIds": sorted(uploaded_ids)}
+    payload = {
+        "formatVersion": RESULT_FORMAT_VERSION,
+        "uploadedIds": sorted(uploaded_ids),
+    }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
@@ -1248,13 +1292,10 @@ def process_api_results(
                 assessment_title=assessment_title,
             )
             parent_org = assessment_parent or parent_org
-            questions = (
-                rich_questions_by_assessment.get(assessment_id_local)
-                or questions_by_assessment.get(assessment_id_local)
-                or []
+            questions = merge_question_definitions(
+                rich_questions_by_assessment.get(assessment_id_local),
+                questions_by_assessment.get(assessment_id_local),
             )
-            if not isinstance(questions, list):
-                questions = []
 
             base = safe_base_name(assessment_title or cloud_assessment_id)
             s3_key = build_object_key(
