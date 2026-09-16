@@ -499,7 +499,9 @@ def resolve_assessment_mapping(
 
     fallback = safe_base_name(assessment_id, "assessment")
     generated_id = safe_base_name(assessment_title, fallback)
-    return generated_id, default_parent_org, True
+    # An automatic assessment id must not force a result into the global/default
+    # organisation. The caller can retain the student's resolved organisation.
+    return generated_id, "", True
 
 
 def parse_created_at(value: Any) -> str:
@@ -1070,10 +1072,36 @@ FROM (
         raise RuntimeError(f"Local OC4D database rich questions returned invalid JSON: {exc}") from exc
     if not isinstance(rich_questions, dict):
         raise RuntimeError("Local OC4D database rich questions must be a JSON object")
+    assessments_sql = """
+SELECT COALESCE(
+  json_object_agg(
+    a.id,
+    json_build_object(
+      'id', a.id,
+      'title', a.title,
+      'module', json_build_object(
+        'id', m.id,
+        'name', m.name
+      )
+    )
+  ),
+  '{}'::json
+)
+FROM "Assessment" a
+LEFT JOIN "Module" m ON m.id = a.module_id;
+"""
+    assessments_raw = _run_psql_query(assessments_sql)
+    try:
+        assessments = json.loads(assessments_raw or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Local OC4D database assessments returned invalid JSON: {exc}") from exc
+    if not isinstance(assessments, dict):
+        raise RuntimeError("Local OC4D database assessments must be a JSON object")
     payload: dict[str, Any] = {
         "data": data,
         "questionsByAssessmentId": questions,
         "richQuestionsByAssessmentId": rich_questions,
+        "assessmentsById": assessments,
         "total": len(data),
         "scope": "all",
         "source": "database",
@@ -1432,6 +1460,9 @@ def write_subject_meta_json(
     module_name: str = "",
     assessment_name: str = "",
     questions: list[dict[str, Any]] | None = None,
+    target_org: str = "",
+    source_assessment_id: str = "",
+    auto_assessment_mapping: bool = False,
 ) -> None:
     payload = {
         "subjectName": subject_name,
@@ -1439,6 +1470,9 @@ def write_subject_meta_json(
         "assessmentName": assessment_name,
         "source": "pi-sync",
         "questions": questions or [],
+        "targetOrg": target_org,
+        "sourceAssessmentId": source_assessment_id,
+        "autoAssessmentMapping": auto_assessment_mapping,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -1462,12 +1496,16 @@ def write_marking_scheme_csv(path: Path, questions: list[dict[str, Any]]) -> Non
 def process_marking_schemes(
     payload: dict[str, Any],
     *,
+    student_index: dict[str, dict[str, str]],
+    cloud_student_ids: dict[str, str],
     assessment_index: dict[str, dict[str, str]],
     default_parent_org: str,
+    unassigned_student_id: str,
     staging_dir: Path,
 ) -> list[dict[str, Any]]:
     questions_by_assessment = payload.get("questionsByAssessmentId") or {}
     rich_questions_by_assessment = payload.get("richQuestionsByAssessmentId") or {}
+    assessments_by_id = payload.get("assessmentsById") or {}
     results = payload.get("data") or []
     if not isinstance(questions_by_assessment, dict) or not isinstance(
         rich_questions_by_assessment, dict
@@ -1487,6 +1525,17 @@ def process_marking_schemes(
     title_by_pi_id: dict[str, str] = {}
     subject_by_pi_id: dict[str, str] = {}
     module_by_pi_id: dict[str, str] = {}
+    orgs_by_pi_id: dict[str, set[str]] = {}
+    if isinstance(assessments_by_id, dict):
+        for pi_assessment_id, raw_assessment in assessments_by_id.items():
+            if not isinstance(raw_assessment, dict):
+                continue
+            assessment_title = str(raw_assessment.get("title") or "").strip()
+            if assessment_title:
+                title_by_pi_id[str(pi_assessment_id)] = assessment_title
+            subject_name, module_name = subject_name_from_assessment(raw_assessment)
+            subject_by_pi_id[str(pi_assessment_id)] = subject_name
+            module_by_pi_id[str(pi_assessment_id)] = module_name
     for result in results:
         if not isinstance(result, dict):
             continue
@@ -1501,9 +1550,27 @@ def process_marking_schemes(
             subject_name, module_name = subject_name_from_assessment(assessment)
             subject_by_pi_id[pi_assessment_id] = subject_name
             module_by_pi_id[pi_assessment_id] = module_name
+        user = result.get("user") or {}
+        if not isinstance(user, dict):
+            user = {}
+        try:
+            _student_id, result_org, _is_unassigned = resolve_student_id(
+                student_index,
+                default_parent_org,
+                unassigned_student_id,
+                cloud_student_ids,
+                user_id=str(result.get("userId") or user.get("id") or "").strip(),
+                user_name=str(user.get("name") or "").strip(),
+                user_email=str(user.get("email") or "").strip(),
+                user_username=str(user.get("username") or "").strip(),
+            )
+            if pi_assessment_id and result_org:
+                orgs_by_pi_id.setdefault(pi_assessment_id, set()).add(result_org)
+        except (KeyError, ValueError):
+            pass
 
     manifest_entries: list[dict[str, Any]] = []
-    counts = {"ready": 0, "failed": 0}
+    counts = {"ready": 0, "skipped": 0, "failed": 0}
 
     all_question_sets = dict(questions_by_assessment)
     all_question_sets.update(rich_questions_by_assessment)
@@ -1512,48 +1579,72 @@ def process_marking_schemes(
             continue
         assessment_title = title_by_pi_id.get(pi_assessment_id, pi_assessment_id)
         try:
-            cloud_assessment_id, parent_org, auto_assessment_mapping = resolve_assessment_mapping(
+            cloud_assessment_id, mapped_parent_org, auto_assessment_mapping = resolve_assessment_mapping(
                 assessment_index,
                 default_parent_org,
                 assessment_id=pi_assessment_id,
                 assessment_title=assessment_title,
             )
-            parent_org = parent_org or default_parent_org
-            csv_path = staging_dir / f"marking-scheme-{cloud_assessment_id}.csv"
-            write_marking_scheme_csv(csv_path, questions)
+            target_orgs = (
+                [mapped_parent_org]
+                if mapped_parent_org
+                else sorted(orgs_by_pi_id.get(pi_assessment_id, set()))
+            )
+            if not target_orgs:
+                counts["skipped"] += 1
+                manifest_entries.append(
+                    {
+                        "status": "skipped",
+                        "kind": "marking-scheme",
+                        "pi_assessment_id": pi_assessment_id,
+                        "assessment_name": assessment_title,
+                        "reason": "no organisation mapping or organisation-scoped result",
+                    }
+                )
+                continue
             subject_name = subject_by_pi_id.get(pi_assessment_id, "General")
             module_name = module_by_pi_id.get(pi_assessment_id, "")
-            subject_json_path = staging_dir / f"marking-scheme-{cloud_assessment_id}.subject.json"
-            write_subject_meta_json(
-                subject_json_path,
-                subject_name=subject_name,
-                module_name=module_name,
-                assessment_name=assessment_title,
-                questions=questions,
-            )
-            scheme_prefix = (
-                f"{normalize_key_segment(parent_org)}/MarkingSchemes/"
-                f"{normalize_key_segment(cloud_assessment_id)}"
-            )
-            s3_key = f"{scheme_prefix}/pi-sync-marking-scheme.csv"
-            subject_s3_key = f"{scheme_prefix}/pi-sync-subject.json"
-            manifest_entries.append(
-                {
-                    "status": "ready",
-                    "kind": "marking-scheme",
-                    "pi_assessment_id": pi_assessment_id,
-                    "assessment_id": cloud_assessment_id,
-                    "assessment_name": assessment_title,
-                    "subject_name": subject_name,
-                    "module_name": module_name,
-                    "auto_assessment_mapping": auto_assessment_mapping,
-                    "csv": str(csv_path),
-                    "s3_key": s3_key,
-                    "subject_json": str(subject_json_path),
-                    "subject_s3_key": subject_s3_key,
-                }
-            )
-            counts["ready"] += 1
+            for parent_org in target_orgs:
+                local_suffix = normalize_key_segment(parent_org)
+                csv_path = staging_dir / f"marking-scheme-{local_suffix}-{cloud_assessment_id}.csv"
+                write_marking_scheme_csv(csv_path, questions)
+                subject_json_path = (
+                    staging_dir / f"marking-scheme-{local_suffix}-{cloud_assessment_id}.subject.json"
+                )
+                write_subject_meta_json(
+                    subject_json_path,
+                    subject_name=subject_name,
+                    module_name=module_name,
+                    assessment_name=assessment_title,
+                    questions=questions,
+                    target_org=parent_org,
+                    source_assessment_id=pi_assessment_id,
+                    auto_assessment_mapping=auto_assessment_mapping,
+                )
+                scheme_prefix = (
+                    f"{normalize_key_segment(parent_org)}/MarkingSchemes/"
+                    f"{normalize_key_segment(cloud_assessment_id)}"
+                )
+                s3_key = f"{scheme_prefix}/pi-sync-marking-scheme.csv"
+                subject_s3_key = f"{scheme_prefix}/pi-sync-subject.json"
+                manifest_entries.append(
+                    {
+                        "status": "ready",
+                        "kind": "marking-scheme",
+                        "pi_assessment_id": pi_assessment_id,
+                        "assessment_id": cloud_assessment_id,
+                        "assessment_name": assessment_title,
+                        "parent_org": parent_org,
+                        "subject_name": subject_name,
+                        "module_name": module_name,
+                        "auto_assessment_mapping": auto_assessment_mapping,
+                        "csv": str(csv_path),
+                        "s3_key": s3_key,
+                        "subject_json": str(subject_json_path),
+                        "subject_s3_key": subject_s3_key,
+                    }
+                )
+                counts["ready"] += 1
         except (KeyError, ValueError) as exc:
             counts["failed"] += 1
             manifest_entries.append(
@@ -1687,8 +1778,11 @@ def main() -> int:
         all_entries.extend(
             process_marking_schemes(
                 payload,
+                student_index=student_index,
+                cloud_student_ids=cloud_student_ids,
                 assessment_index=assessment_index,
                 default_parent_org=default_parent_org,
+                unassigned_student_id=unassigned_student_id,
                 staging_dir=staging_dir,
             )
         )
