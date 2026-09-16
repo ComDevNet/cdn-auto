@@ -711,8 +711,22 @@ def selected_answer_for(answers: Any, question: dict[str, Any], question_index: 
         selected_index = raw_answer if isinstance(raw_answer, int) else None
     elif isinstance(answers, dict):
         review = answers.get("review")
-        if isinstance(review, list) and question_index < len(review):
-            item = review[question_index]
+        item: Any = None
+        if isinstance(review, list):
+            question_id = str(question.get("id") or "").strip()
+            if question_id:
+                item = next(
+                    (
+                        candidate
+                        for candidate in review
+                        if isinstance(candidate, dict)
+                        and str(candidate.get("questionId") or "").strip() == question_id
+                    ),
+                    None,
+                )
+            if item is None and question_index < len(review):
+                item = review[question_index]
+        if item is not None:
             if isinstance(item, dict):
                 raw = item.get("selectedIndex")
                 selected_index = raw if isinstance(raw, int) else None
@@ -774,16 +788,38 @@ def merge_question_definitions(
     if not rich:
         return [item for item in stored if isinstance(item, dict)]
 
+    stored_rows = [item for item in stored if isinstance(item, dict)]
+    stored_by_prompt: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for index, item in enumerate(stored_rows):
+        prompt_key = " ".join(question_prompt(item, index).split()).casefold()
+        if prompt_key:
+            stored_by_prompt.setdefault(prompt_key, []).append((index, item))
+
+    used_stored: set[int] = set()
     merged: list[dict[str, Any]] = []
-    for index in range(max(len(rich), len(stored))):
-        base = stored[index] if index < len(stored) and isinstance(stored[index], dict) else {}
-        rich_question = rich[index] if index < len(rich) else {}
+    for index, rich_question in enumerate(rich):
         details = rich_question if isinstance(rich_question, dict) else {}
+        prompt_key = " ".join(question_prompt(details, index).split()).casefold()
+        matched: tuple[int, dict[str, Any]] | None = None
+        for candidate in stored_by_prompt.get(prompt_key, []):
+            if candidate[0] not in used_stored:
+                matched = candidate
+                break
+        if matched is None and index < len(stored_rows) and index not in used_stored:
+            matched = (index, stored_rows[index])
+        if matched is not None:
+            used_stored.add(matched[0])
+            base = matched[1]
+        else:
+            base = {}
         question = {**base, **details}
         choices = details.get("choices")
         if isinstance(choices, list) and choices:
             question["options"] = choices
         merged.append(question)
+    for index, item in enumerate(stored_rows):
+        if index not in used_stored:
+            merged.append(item)
     return merged
 
 

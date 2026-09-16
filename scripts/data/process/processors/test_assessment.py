@@ -149,6 +149,51 @@ class AssessmentAnswerSyncTests(unittest.TestCase):
             "West",
         )
 
+    def test_matches_rich_questions_to_database_ids_by_prompt_when_database_order_differs(self):
+        questions = assessment.merge_question_definitions(
+            [
+                {"question": "First question", "questionType": "short_answer"},
+                {"question": "Second question", "questionType": "short_answer"},
+            ],
+            [
+                {"id": "second-id", "prompt": "Second question"},
+                {"id": "first-id", "prompt": "First question"},
+            ],
+        )
+
+        self.assertEqual([question["id"] for question in questions], ["first-id", "second-id"])
+
+    def test_uses_review_question_id_before_review_array_position(self):
+        answers = {
+            "review": [
+                {"questionId": "second-id", "selectedAnswer": "Second answer"},
+                {"questionId": "first-id", "selectedAnswer": "First answer"},
+            ],
+            "selections": {
+                "first-id": "First answer",
+                "second-id": "Second answer",
+            },
+        }
+
+        self.assertEqual(
+            assessment.selected_answer_for(answers, {"id": "first-id"}, 0),
+            "First answer",
+        )
+
+    def test_unanswered_question_does_not_borrow_another_questions_selection(self):
+        answers = {
+            "review": [
+                {"questionId": "answered-id", "selectedAnswer": "Answered"},
+                {"questionId": "blank-id", "selectedAnswer": ""},
+            ],
+            "selections": {"answered-id": "Answered"},
+        }
+
+        self.assertEqual(
+            assessment.selected_answer_for(answers, {"id": "blank-id"}, 0),
+            "",
+        )
+
     def test_writes_all_rich_answer_types_to_the_synced_csv(self):
         questions = assessment.merge_question_definitions(
             [
