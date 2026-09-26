@@ -1680,6 +1680,51 @@ def subject_name_from_assessment(assessment: dict[str, Any]) -> tuple[str, str]:
     return "General", module_name
 
 
+def cloud_scheme_question(question: dict[str, Any], index: int) -> dict[str, Any]:
+    """Return a question shape the OC4D cloud marking-scheme importer can grade."""
+    normalized = dict(question)
+    prompt = question_prompt(question, index)
+    supplied_answers = question.get("correctAnswers")
+    correct_answers = (
+        [str(answer).strip() for answer in supplied_answers if str(answer).strip()]
+        if isinstance(supplied_answers, list)
+        else []
+    )
+    raw_answer = str(question.get("rawAnswer") or "").strip()
+    accepts_any_answer = bool(question.get("acceptsAnyAnswer"))
+    derived_from_legacy_options = False
+
+    if not accepts_any_answer and not correct_answers and (
+        not raw_answer or raw_answer in {"-", ".", "—"}
+    ):
+        derived_answer = pi_correct_answer(question)
+        if derived_answer and derived_answer not in {"-", ".", "—"}:
+            # An option can contain the word "or" without describing
+            # alternative accepted answers. Keep the exact option in the
+            # authoritative list so the cloud grader does not split it.
+            raw_answer = "-"
+            correct_answers = [derived_answer]
+            derived_from_legacy_options = True
+        else:
+            accepts_any_answer = True
+
+    if not accepts_any_answer and not raw_answer and not derived_from_legacy_options:
+        raw_answer = "; ".join(correct_answers)
+
+    normalized.update(
+        {
+            "question": prompt,
+            "questionType": str(
+                question.get("questionType") or question.get("type") or ""
+            ).strip(),
+            "rawAnswer": "-" if accepts_any_answer else raw_answer,
+            "correctAnswers": [] if accepts_any_answer else correct_answers,
+            "acceptsAnyAnswer": accepts_any_answer,
+        }
+    )
+    return normalized
+
+
 def write_subject_meta_json(
     path: Path,
     *,
@@ -1696,7 +1741,10 @@ def write_subject_meta_json(
         "moduleName": module_name,
         "assessmentName": assessment_name,
         "source": "pi-sync",
-        "questions": questions or [],
+        "questions": [
+            cloud_scheme_question(question, index)
+            for index, question in enumerate(questions or [])
+        ],
         "targetOrg": target_org,
         "sourceAssessmentId": source_assessment_id,
         "autoAssessmentMapping": auto_assessment_mapping,

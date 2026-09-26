@@ -253,6 +253,38 @@ class AssessmentAnswerSyncTests(unittest.TestCase):
             payload = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(payload["formatVersion"], assessment.RESULT_FORMAT_VERSION)
 
+    def test_subject_metadata_derives_cloud_grading_fields_from_legacy_mcq(self):
+        question = {
+            "id": "question-id",
+            "type": "multiple_choice",
+            "prompt": "How does a modern optical mouse track movement?",
+            "options": [
+                "By using a tiny camera and a light or laser to take pictures",
+                "By rolling a ball",
+            ],
+            "correctAnswerIndex": 0,
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "pi-sync-subject.json"
+            assessment.write_subject_meta_json(
+                path,
+                subject_name="Mathematics",
+                assessment_name="Shapes",
+                questions=[question],
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        exported = payload["questions"][0]
+        self.assertEqual(exported["question"], question["prompt"])
+        self.assertEqual(exported["questionType"], "multiple_choice")
+        self.assertEqual(exported["rawAnswer"], "-")
+        self.assertEqual(
+            exported["correctAnswers"],
+            ["By using a tiny camera and a light or laser to take pictures"],
+        )
+        self.assertFalse(exported["acceptsAnyAnswer"])
+
 
 if __name__ == "__main__":
     unittest.main()
