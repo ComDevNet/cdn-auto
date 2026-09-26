@@ -1309,7 +1309,16 @@ SELECT COALESCE(
       'title', a.title,
       'module', json_build_object(
         'id', m.id,
-        'name', m.name
+        'name', m.name,
+        'categories', COALESCE((
+          SELECT json_agg(
+            json_build_object('id', c.id, 'name', c.name)
+            ORDER BY c.name ASC, c.id ASC
+          )
+          FROM "_CategoryToModule" ctm
+          JOIN "Category" c ON c.id = ctm."A"
+          WHERE ctm."B" = m.id
+        ), '[]'::json)
       )
     )
   ),
@@ -1822,7 +1831,19 @@ def process_marking_schemes(
         assessment_title = str(assessment.get("title") or "").strip()
         if pi_assessment_id and assessment_title and pi_assessment_id not in title_by_pi_id:
             title_by_pi_id[pi_assessment_id] = assessment_title
-        if pi_assessment_id and pi_assessment_id not in subject_by_pi_id:
+        result_module = (
+            assessment.get("module")
+            if isinstance(assessment.get("module"), dict)
+            else {}
+        )
+        result_categories = result_module.get("categories")
+        result_has_category = isinstance(result_categories, list) and any(
+            isinstance(item, dict) and str(item.get("name") or "").strip()
+            for item in result_categories
+        )
+        if pi_assessment_id and (
+            pi_assessment_id not in subject_by_pi_id or result_has_category
+        ):
             subject_name, module_name = subject_name_from_assessment(assessment)
             subject_by_pi_id[pi_assessment_id] = subject_name
             module_by_pi_id[pi_assessment_id] = module_name

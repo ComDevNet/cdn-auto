@@ -285,6 +285,22 @@ class AssessmentAnswerSyncTests(unittest.TestCase):
         )
         self.assertFalse(exported["acceptsAnyAnswer"])
 
+    def test_subject_name_prefers_module_category(self):
+        subject_name, module_name = assessment.subject_name_from_assessment(
+            {
+                "title": "The Human Body Systems - Grade 3 Science Quiz",
+                "module": {
+                    "name": "The Human Body Systems - Grade 3 Science",
+                    "categories": [
+                        {"id": "science-id", "name": "Science"},
+                    ],
+                },
+            }
+        )
+
+        self.assertEqual(subject_name, "Science")
+        self.assertEqual(module_name, "The Human Body Systems - Grade 3 Science")
+
 
 if __name__ == "__main__":
     unittest.main()
