@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Developer wiki (`docs/DEVELOPER-WIKI.md`) as the canonical technical reference for architecture, config, queue, S3/API contracts, OC4D assessments, and database backups
+- Harvester / dispatcher automation split (`v5-log-harvester` + `v5-log-dispatcher`) with durable per-stage queue states (`pending` / `uploading` / `completed` / `failed`)
+- Near-realtime schedules (15 / 30 / 60 min) and `migrate_near_realtime.sh`
+- Concurrent-run flock lock for automation wrappers
+- OC4D assessment harvest: DB-first Postgres access, API fallback, cloud student auto-map, assessment auto-IDs, marking-scheme + subject JSON uploads
+- Database menu: scheduled Docker Postgres backup / restore (`oc4d-db-backup.timer`)
+- Manual upload menu entry for OC4D assessments and flush-upload-queue
+
+### Changed
+
+- Upload queue layout moved to `00_DATA/00_UPLOAD_QUEUE/{stage}/{state}/` with OC4D `.oc4dkey` sidecars (key, optional result id, optional scheme version)
+- Assessment identity resolution no longer hard-fails unmapped students/assessments by default (`unassigned` + generated assessment IDs)
+- Documentation refreshed across root README, config, data, automation, upload, process, and database READMEs
+- Kolibri upload support removed from the automation streams
+
+### Fixed
+
+- Assessment answer/question matching, rich-question handling, module categories, and uploaded-id recording after successful S3 flush
+- Automation PATH install / execute bits and shell script line endings for Unix hosts
+
 ## [2.5] - 2025-10-18
 
 ### Added
