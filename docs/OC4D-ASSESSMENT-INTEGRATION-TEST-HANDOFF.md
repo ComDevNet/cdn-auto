@@ -1,5 +1,27 @@
 # OC4D Assessment Pull Integration — Implementation & Test Handoff
 
+> **Status (2026-10):** Historical implementation + E2E test handoff. Several sections below describe the **original API-only / hard-fail mapping / flat queue** design and are **superseded** by current code.
+>
+> **Use [DEVELOPER-WIKI.md](./DEVELOPER-WIKI.md) as the canonical source of truth** for:
+> - DB-first assessment harvest (API fallback)
+> - Auto student/assessment mapping + `unassigned` fallback (**DB/API path only**; `OC4D_SOURCE_DIR` still hard-fails)
+> - Harvester/dispatcher queue (`pending`/`uploading`/`completed`)
+> - Multi-line `.oc4dkey` sidecars and marking-scheme uploads
+> - Cloud ingest reality: `oc4d` Lambda currently ingests **RACHEL/Kolibri** only; Assessments/MarkingSchemes are skipped (wiki §14)
+>
+> Keep this file for cross-repo identity notes, Pi test checklists, and smoke-test ideas. Prefer updating the wiki when contracts change.
+
+### Delta vs current `cdn-auto` code
+
+| Handoff assumption | Current behavior |
+|--------------------|------------------|
+| API-only pull | DB-first; API fallback; `OC4D_ASSESSMENT_SOURCE=api` to force API |
+| Hard-fail unmapped student/assessment | Auto-map + `unassigned` + generated assessment IDs |
+| Flat `OC4DAssessments/` queue | `{pending,uploading,completed,failed}/` under each stage |
+| Single-line `.oc4dkey` | Multi-line: S3 key, optional `result_id`, optional scheme version |
+| No marking schemes | `MarkingSchemes/{assessmentId}/pi-sync-*.csv|json` |
+| Single `v5-log-processor` timer | Harvester + dispatcher timers |
+
 This document records **everything implemented** across three repos so another agent (or human) can run verification without re-reading the full conversation or plan file.
 
 **Plan reference (do not edit):** `oc4d-assessment-pull_ef12ff58.plan.md`  
@@ -11,7 +33,7 @@ This document records **everything implemented** across three repos so another a
 
 The system should:
 
-1. Pull assessment results from the **local Pi OC4D server API** (`oc4d-server`): `GET /api/assessment-results?scope=all`
+1. Pull assessment results from the **local Pi OC4D Postgres DB** (preferred) or **OC4D server API** (`oc4d-server`): `GET /api/assessment-results?scope=all`
 2. Resolve cloud `studentId` and `assessmentId` via CSV mapping files (hard-fail if unmapped)
 3. Build validated CSV artifacts (header + ≥1 data row)
 4. Upload to S3 at strict keys:

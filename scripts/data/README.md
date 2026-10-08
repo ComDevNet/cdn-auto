@@ -2,41 +2,50 @@
 
 Menus and scripts for collecting, processing, uploading, and automating analytics on CDN server logs.
 
-Submodules
+Canonical reference: [docs/DEVELOPER-WIKI.md](../../docs/DEVELOPER-WIKI.md).
 
-- collection — gathers logs from v4 (Apache), v5 (OC4D), v3 (D-Hub), and v6 (OC4D with module paths)
-- process — parses logs into CSV summaries via processors
-- upload — manual month filtering and S3 upload for processed logs
-- automation — unattended runs with systemd
-- lib — shared helpers for S3 destinations, queue handling, and OC4D assessment uploads
+## Submodules
 
-End-to-end flow
+- **collection** — gathers logs from v4 (Apache), v5 (OC4D), v3 (D-Hub), and v6 (OC4D with module paths)
+- **process** — parses logs into CSV summaries via processors (includes `assessment.py`)
+- **upload** — manual month filtering, ModuleGaze upload, OC4D assessments, queue flush
+- **automation** — harvester + dispatcher systemd units
+- **lib** — shared S3 / queue / OC4D helpers
 
-1. Collect: copies logs into `00_DATA/LOCATION_logs_YYYY_MM_DD` and decompresses `.gz`
-2. Process: writes `00_DATA/00_PROCESSED/RUN/summary.csv` using the right processor
-3. Finalize + Upload: either manual ([upload](./upload/)) or scheduled ([automation/runner.sh](./automation/runner.sh))
-4. OC4D Assessments: pulls assessment results from the local OC4D API, maps student/assessment IDs, and uploads contract CSVs to `OC4D_BUCKET`
-   - Student IDs are resolved automatically from configured cloud roster sources and existing cloud S3 student prefixes before falling back to `student-map.csv` overrides.
-   - New/unmapped assessments are uploaded automatically with generated assessment IDs; the assessment map is only an override file.
-   - Result rows are still exported if question metadata is missing, using generic answer columns.
+## End-to-end flow
 
-Data contracts
+1. **Collect** — copies logs into `00_DATA/LOCATION_logs_YYYY_MM_DD` and decompresses `.gz`
+2. **Process** — writes `00_DATA/00_PROCESSED/RUN/summary.csv` using the right processor
+3. **Filter + enqueue** — automation filters by schedule window and writes `00_UPLOAD_QUEUE/{stage}/pending/`
+4. **Dispatch / upload** — dispatcher (or manual flush) uploads when online and inside `UPLOAD_WINDOW`
+5. **OC4D assessments** — DB-first harvest of results + marking schemes; maps student/assessment IDs; uploads to `OC4D_BUCKET`
+   - Students resolve from cloud roster sources and existing cloud S3 student prefixes before local `student-map.csv` overrides; else `unassigned`
+   - Unmapped assessments get generated stable IDs; assessment map is an override file
+   - Result rows still export if question metadata is missing (generic answer columns)
 
-- Input logs (v4): text lines in Apache combined format (`access.log*`)
-- Input logs (v5): JSON per line with a `message` field that embeds HTTP request data
-- Input logs (v3): JSON per line with a `message` field; paths include UUID `/modules/[uuid]/[module-name]/`, `/uploads/modules/[uuid]/[module-name]/`, or `/uploads/other-modules/[module-name]/`
-- Input logs (v6): JSON per line with a `message` field stored in `/var/log/oc4d`; paths include module paths similar to v3
-- OC4D assessment exports: header + data-row CSV files uploaded to `{parentOrg}/Assessments/{studentId}/{assessmentId}/{base}__{isoTs}.csv`
-- OC4D mapping files:
-  - `config/oc4d/student-map.example.csv` and `config/oc4d/assessment-map.example.csv` ship in Git as format templates
-  - `config/oc4d/student-map.csv` and `config/oc4d/assessment-map.csv` are generated locally during configure when missing; optional overrides only
-- Output CSV (summary.csv) columns (vary by processor) include at least:
+## Data contracts
+
+- Input logs (v4): Apache combined (`access.log*`)
+- Input logs (v5): JSON per line with `message` embedding HTTP request data
+- Input logs (v3): JSON per line; paths include UUID `/modules/[uuid]/[module-name]/`, `/uploads/modules/…`, or `/uploads/other-modules/…`
+- Input logs (v6): JSON under `/var/log/oc4d`; module paths similar to v3
+- OC4D assessment CSV: `{parentOrg}/Assessments/{studentId}/{assessmentId}/{base}__{isoTs}.csv`
+- OC4D marking schemes: `{parentOrg}/MarkingSchemes/{assessmentId}/pi-sync-marking-scheme.csv` (+ `pi-sync-subject.json`)
+- OC4D mapping templates: `config/oc4d/student-map.example.csv`, `assessment-map.example.csv` (live maps local/gitignored)
+- Usage `summary.csv` columns (vary by processor) include at least:
   - IP Address, Access Date, Module Viewed, Status Code, Data Saved (GB), Device Used, Browser Used
-  - Some processors (for example `castle.py`) also include Access Time and Location Viewed
-  - `dhub.py` and `log-v6.py` use the same schema as `logv2.py`, extracting module names from extended module paths
+  - Castle also includes Access Time and Location Viewed
+  - `dhub.py` / `log-v6.py` share the `logv2.py` schema with extended module path extraction
 
-Where to start
+## Queue layout
 
-- Use [main.sh](./main.sh) to drive the whole flow, or jump into each submodule
+```text
+00_DATA/00_UPLOAD_QUEUE/{RACHEL|ModuleGaze|OC4DAssessments}/{pending|uploading|completed|failed}/
+```
 
-See also: `scripts/data/automation/README.md` for unattended scheduling.
+See wiki §4 for sidecars (`.cdnrun`, `.oc4dkey`) and flush semantics.
+
+## Where to start
+
+- Menu: [main.sh](./main.sh)
+- Automation: [automation/README.md](./automation/README.md)

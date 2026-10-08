@@ -8,7 +8,7 @@ Python scripts that parse logs and build summary.csv.
 - [dhub.py](./dhub.py) — D-Hub (Server v3) UUID-based module logs
 - [log-v6.py](./log-v6.py) — Server v6 (OC4D with module paths) logs
 - [modulegaze.py](./modulegaze.py) — ModuleGaze session logs from `/var/log/modulegaze`
-- [assessment.py](./assessment.py) — OC4D assessment results from the local API and optional source CSV folder
+- [assessment.py](./assessment.py) — OC4D assessment results from local Postgres (preferred), API fallback, and optional source CSV folder; also emits marking-scheme artifacts
 
 Implementation notes
 
@@ -19,5 +19,5 @@ Implementation notes
 - Error handling: castle.py writes JSON/regex/timestamp issues to error_log.txt; logv2.py, dhub.py, and log-v6.py print skipped lines
 - Module extraction: dhub.py and log-v6.py handle `/uploads/modules/[id]/[module-name]`, `/modules/[id]/[module-name]`, and `/uploads/other-modules/[module-name]` path formats
 - ModuleGaze names: modulegaze.py resolves `moduleId` through `MODULEGAZE_API_BASE_URL/api/modules` (default `http://127.0.0.1:3002`) and optional `MODULEGAZE_MODULE_MAP_FILE` CSV fallback
-- OC4D assessments: assessment.py resolves students from optional cloud roster sources, existing cloud S3 student prefixes, and `config/oc4d/student-map.csv` overrides. It uses `config/oc4d/assessment-map.csv` as optional overrides; when a new assessment is not mapped, it generates a safe assessment ID from the title and continues. If question metadata is missing but result answers exist, it writes generic answer columns instead of failing the result.
+- OC4D assessments: assessment.py prefers local Postgres (`OC4D_DATABASE_URL` / file / `oc4d_db` docker), then the HTTP API. Students resolve from optional cloud roster sources, existing cloud S3 student prefixes, and `config/oc4d/student-map.csv` overrides (else `OC4D_UNASSIGNED_STUDENT_ID`). Assessment map CSV is optional; unmapped titles get stable auto IDs. Missing question metadata yields generic answer columns. Marking schemes upload under `{parentOrg}/MarkingSchemes/{assessmentId}/`. Full contract: [docs/DEVELOPER-WIKI.md](../../../../docs/DEVELOPER-WIKI.md)
 - Performance: processors stream line-by-line; summary.csv is combined from per-file CSVs to keep memory steady

@@ -10,6 +10,7 @@ Processors
 - v3/dhub -> [processors/dhub.py](./processors/dhub.py)
 - v4/v6 -> [processors/log-v6.py](./processors/log-v6.py)
 - ModuleGaze -> [processors/modulegaze.py](./processors/modulegaze.py)
+- OC4D assessments -> [processors/assessment.py](./processors/assessment.py) (DB-first results + marking schemes; used by automation / upload menus, not the log `logs.sh` path)
 
 Outputs
 
@@ -26,6 +27,7 @@ CSV schemas
 - v3/dhub.py: columns = [IP Address, Access Date, Module Viewed, Status Code, Data Saved (GB), Device Used, Browser Used]
 - v6/log-v6.py: columns = [IP Address, Access Date, Module Viewed, Status Code, Data Saved (GB), Device Used, Browser Used]
 - ModuleGaze/modulegaze.py: columns = [User, Access Time, IP Address, Access Date, Module Viewed, Duration Seconds]
+- OC4D assessments: first column `Timestamp`, then question prompts (or generic answer columns); S3 key `{parentOrg}/Assessments/{studentId}/{assessmentId}/{base}__{isoTs}.csv`. Marking schemes upload separately under `MarkingSchemes/`. See [docs/DEVELOPER-WIKI.md](../../../docs/DEVELOPER-WIKI.md) §7.
 
 Notes & edge cases
 
