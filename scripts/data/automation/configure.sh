@@ -375,7 +375,7 @@ esac
 # --- Harvest interval (how often to collect while device is on) ---
 if [[ "$SCHEDULE_TYPE" == "near_realtime" ]]; then
   HARVEST_INTERVAL="$RUN_INTERVAL"
-  say "Near-realtime: harvest/upload every ${HARVEST_INTERVAL}s, upload window=always"
+  say "Near-realtime: harvest every ${HARVEST_INTERVAL}s, retry uploads every 60s, upload window=always"
 else
   while :; do
     prompt_text "Harvest interval seconds (default 3600 = hourly)" "${HARVEST_INTERVAL}" HARVEST_INTERVAL
@@ -565,22 +565,19 @@ if systemctl list-unit-files "$DISPATCH_TIMER" >/dev/null 2>&1; then
     echo "OnCalendar="
     echo "OnUnitActiveSec="
     echo "OnBootSec="
-    if [[ "$UPLOAD_WINDOW" == "always" ]]; then
-      echo "OnBootSec=${DISPATCH_BOOT_SEC}"
-      echo "OnUnitActiveSec=${HARVEST_INTERVAL}"
-    else
-      echo "OnBootSec=5min"
-      echo "OnCalendar=hourly"
-    fi
+    echo "OnBootSec=${DISPATCH_BOOT_SEC}"
+    echo "OnUnitInactiveSec="
+    echo "OnUnitInactiveSec=60s"
+    echo "AccuracySec=5s"
     echo "Persistent=true"
   } | sudo tee "$DROP_DIR/override.conf" >/dev/null
   sudo systemctl daemon-reload
   sudo systemctl enable "$DISPATCH_TIMER" >/dev/null
   sudo systemctl restart "$DISPATCH_TIMER"
   if [[ "$UPLOAD_WINDOW" == "always" ]]; then
-    say "⏱  Dispatcher timer: every ${HARVEST_INTERVAL}s (+${DISPATCH_STAGGER_SEC}s stagger), window '$UPLOAD_WINDOW' ($DISPATCH_TIMER)"
+    say "⏱  Dispatcher timer: retry checks every 60s after each attempt, window '$UPLOAD_WINDOW' ($DISPATCH_TIMER)"
   else
-    say "⏱  Dispatcher timer: hourly checks, uploads only in window '$UPLOAD_WINDOW' ($DISPATCH_TIMER)"
+    say "⏱  Dispatcher timer: checks every 60s, uploads only in window '$UPLOAD_WINDOW' ($DISPATCH_TIMER)"
   fi
 else
   say "⚠️  $DISPATCH_TIMER not installed; run Install Automation first."

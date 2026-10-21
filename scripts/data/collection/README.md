@@ -29,4 +29,4 @@ Inner workings
 - v6 copies oc4d-*.log and oc4d-*.log.gz files from /var/log/oc4d (excluding exceptions)
 - ModuleGaze copies only modulegaze-sessions.log and modulegaze-sessions-*.log.zip from /var/log/modulegaze
 - The resulting folder is moved into 00_DATA for the processing stage
-- After processing succeeds, that raw run folder is removed automatically; only the processed output under 00_DATA/00_PROCESSED/ remains until upload
+- After processing succeeds, that raw run folder is removed automatically; the processed output remains until automation verifies its durable queue copy, or a manual upload succeeds

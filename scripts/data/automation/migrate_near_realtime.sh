@@ -33,7 +33,7 @@ printf '%s\n' '[Timer]' 'OnCalendar=' 'OnUnitActiveSec=' 'OnUnitActiveSec=900' '
   >/etc/systemd/system/v5-log-harvester.timer.d/override.conf
 # Dispatcher starts ~2 min after harvester (OnBootSec) and shares a flock in wrappers.
 printf '%s\n' '[Timer]' 'OnCalendar=' 'OnUnitActiveSec=' 'OnBootSec=' 'OnBootSec=240' \
-  'OnUnitActiveSec=900' 'Persistent=true' \
+  'OnUnitInactiveSec=' 'OnUnitInactiveSec=60s' 'AccuracySec=5s' 'Persistent=true' \
   >/etc/systemd/system/v5-log-dispatcher.timer.d/override.conf
 
 systemctl daemon-reload
