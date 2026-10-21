@@ -17,7 +17,8 @@ Outputs
 - summary.csv written to 00_DATA/00_PROCESSED/RUN_FOLDER/
 - Individual per-file CSVs are also generated alongside summary.csv
 - After successful processing, the raw collection folder in 00_DATA/RUN_FOLDER/ is removed automatically
-- After a successful upload, or when filtering finds no rows for the selected period, the processed folder in 00_DATA/00_PROCESSED/RUN_FOLDER/ is removed
+- Automation removes the processed working folder after verifying the durable queue copy; manual uploads remove it after success. Empty schedule windows also remove the working folder. Failed enqueue attempts preserve it.
+- V5/V6 and D-Hub summaries combine only per-log CSVs created in the current processing pass, excluding prior filtered exports and stale CSVs.
 
 CSV schemas
 

@@ -163,6 +163,11 @@ for stage in RACHEL ModuleGaze OC4DAssessments; do
 done
 LAST_H=$(tr -d '\r\n' < "$QUEUE_DIR/.last_harvest_ok" 2>/dev/null || true)
 LAST_U=$(tr -d '\r\n' < "$QUEUE_DIR/.last_upload_ok" 2>/dev/null || true)
+if [[ -f "$QUEUE_DIR/.harvest_storage_paused" ]]; then
+  echo "  Collection paused for storage: $(cat "$QUEUE_DIR/.harvest_storage_paused")"
+fi
+echo "  Last dispatch attempt: $(cat "$QUEUE_DIR/.last_dispatch_attempt" 2>/dev/null || echo '<never>')"
+echo "  Last dispatch error: $(cat "$QUEUE_DIR/.last_dispatch_error" 2>/dev/null || echo '<never>')"
 echo "  Last harvest OK : ${LAST_H:-<never>}"
 echo "  Last upload OK  : ${LAST_U:-<never>}"
 if [ -z "$UPLOAD_WINDOW" ] || [ "$UPLOAD_WINDOW" = "always" ]; then

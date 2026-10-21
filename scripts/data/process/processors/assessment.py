@@ -1788,6 +1788,8 @@ def process_marking_schemes(
     unassigned_student_id: str,
     staging_dir: Path,
 ) -> list[dict[str, Any]]:
+    if os.environ.get("OC4D_MARKING_SCHEMES_ENABLED", "1") == "0":
+        return []
     questions_by_assessment = payload.get("questionsByAssessmentId") or {}
     rich_questions_by_assessment = payload.get("richQuestionsByAssessmentId") or {}
     assessments_by_id = payload.get("assessmentsById") or {}

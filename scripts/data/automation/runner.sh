@@ -108,7 +108,7 @@ NEW_FOLDER="${DEVICE_LOCATION}_logs_${TODAY_YMD}"
 COLLECT_DIR="$DATA_DIR/$NEW_FOLDER"
 
 has_internet() {
-  getent hosts s3.amazonaws.com >/dev/null 2>&1 || return 1
+  timeout 5s getent hosts s3.amazonaws.com >/dev/null 2>&1 || return 1
   if command -v curl >/dev/null 2>&1; then
     timeout 5s curl -Is https://s3.amazonaws.com >/dev/null 2>&1 || return 1
   fi
@@ -158,7 +158,7 @@ process_rachel_logs() {
     server\ v6|v6)
       log_dir="/var/log/oc4d"
       [[ -d "$log_dir" ]] || { log "[rachel][warn] $log_dir not found. Skipping RACHEL."; return 0; }
-      find "$log_dir" -type f -name 'oc4d-*.log' ! -name 'oc4d-exceptions-*.log' -exec cp {} "$COLLECT_DIR"/ \; || {
+      find "$log_dir" -type f \( -name 'oc4d-*.log' -o -name 'oc4d-*.log.gz' \) ! -name 'oc4d-exceptions-*' -exec cp {} "$COLLECT_DIR"/ \; || {
         log "[rachel][warn] RACHEL collection failed from $log_dir."
         return 0
       }
@@ -171,7 +171,7 @@ process_rachel_logs() {
 
   shopt -s nullglob
   for gz in "$COLLECT_DIR"/*.gz; do
-    gzip -df "$gz" || true
+    gzip -cd "$gz" > "${gz%.gz}_archived.log" && rm -f "$gz" || log "[rachel][warn] Could not decompress $gz"
   done
   shopt -u nullglob
 
@@ -442,6 +442,10 @@ PY
 
 run_harvest() {
   log "[mode] harvest (interval hint=${HARVEST_INTERVAL}s, filter=$SCHEDULE_TYPE)"
+  if ! harvest_storage_ready "$DATA_DIR" "$QUEUE_DIR"; then
+    write_queue_marker "$QUEUE_DIR" "last_harvest_storage_blocked"
+    return 0
+  fi
   process_rachel_logs
   if [[ -n "$FINAL_CSV" ]]; then
     queue_one "$FINAL_CSV" "$QUEUE_DIR" "RACHEL" "$NEW_FOLDER"
@@ -454,16 +458,23 @@ run_harvest() {
 
 run_dispatch() {
   log "[mode] dispatch (upload_window=$UPLOAD_WINDOW)"
+  if ! background_memory_ready; then return 0; fi
   if ! upload_window_open; then
     log "[dispatch] $(next_upload_window_hint); not uploading."
     return 0
   fi
   if ! has_internet; then
-    log "[dispatch] Offline; leaving pending items queued."
+    write_queue_marker "$QUEUE_DIR" "last_dispatch_offline"
+    log "[dispatch] Offline; leaving pending items queued for automatic retry."
     return 0
   fi
   log "[dispatch] Window open and online; flushing pending uploads..."
-  flush_all_queues "$QUEUE_DIR" || log "[warn] Some queued files could not be flushed."
+  write_queue_marker "$QUEUE_DIR" "last_dispatch_attempt"
+  if ! flush_all_queues "$QUEUE_DIR"; then
+    write_queue_marker "$QUEUE_DIR" "last_dispatch_error"
+    log "[warn] Uploads remain pending; the background timer will retry."
+    return 1
+  fi
 }
 
 case "$RUN_MODE" in

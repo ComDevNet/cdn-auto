@@ -123,9 +123,11 @@ def save_processed_log_file(folder_path, file_path, log_data):
         ])
         if log_data:
             csv_writer.writerows(log_data)
+        return processed_file_path
+    return None
 
 
-def create_master_csv(folder_path):
+def create_master_csv(folder_path, csv_paths):
     """Create a master CSV file combining all processed CSV data."""
     master_csv_path = os.path.join(folder_path, "summary.csv")
     os.makedirs(folder_path, exist_ok=True)
@@ -143,14 +145,11 @@ def create_master_csv(folder_path):
         ])
 
         # Combine all individual CSVs into the master CSV
-        for root, _, files in os.walk(folder_path):
-            for file in files:
-                if file.endswith(".csv") and file != "summary.csv":
-                    file_path = os.path.join(root, file)
-                    with open(file_path, 'r', encoding='utf-8') as csv_file:
-                        csv_reader = csv.reader(csv_file)
-                        next(csv_reader)  # Skip header
-                        csv_writer.writerows(csv_reader)
+        for file_path in csv_paths:
+            with open(file_path, 'r', encoding='utf-8') as csv_file:
+                csv_reader = csv.reader(csv_file)
+                next(csv_reader, None)
+                csv_writer.writerows(csv_reader)
 
 
 if __name__ == '__main__':
@@ -164,13 +163,16 @@ if __name__ == '__main__':
 
     total_files = sum(len(files) for _, _, files in os.walk(folder_path))
     processed_files = 0
+    csv_paths = []
 
     for root, _, files in os.walk(folder_path):
         for file in files:
             if file.endswith(".log"):
                 file_path = os.path.join(root, file)
                 log_data = process_log_file(file_path)
-                save_processed_log_file(processed_folder_path, file_path, log_data)
+                csv_path = save_processed_log_file(processed_folder_path, file_path, log_data)
+                if csv_path:
+                    csv_paths.append(csv_path)
                 processed_files += 1
                 print(
                     f"\rProcessing files: {processed_files}/{total_files} "
@@ -180,6 +182,6 @@ if __name__ == '__main__':
                 )
 
     # Create the master summary CSV
-    create_master_csv(processed_folder_path)
+    create_master_csv(processed_folder_path, csv_paths)
 
     print("\nProcessing completed. All log files have been processed.")

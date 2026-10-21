@@ -2,7 +2,7 @@
 
 CDN-auto **harvests whenever the device is on** into a durable local queue, and **uploads only during a configured upload window** (or when you force-flush).
 
-Near-realtime: choose **Near-realtime every 15/30/60 min** in Configure. That sets `SCHEDULE_TYPE=near_realtime` (today→now rolling window, stamped every interval), `HARVEST_INTERVAL`/`RUN_INTERVAL` to match, and `UPLOAD_WINDOW=always` so dispatch runs on the same cadence.
+Near-realtime: choose **Near-realtime every 15/30/60 min** in Configure. That sets `SCHEDULE_TYPE=near_realtime` (today→now rolling window, stamped every interval), `HARVEST_INTERVAL`/`RUN_INTERVAL` to match, and `UPLOAD_WINDOW=always` while dispatch retries independently every minute after each attempt.
 
 Streams: RACHEL usage, ModuleGaze, OC4D assessments. **Kolibri is out** (not produced by cdn-auto).
 
@@ -11,6 +11,7 @@ Canonical contracts: [docs/DEVELOPER-WIKI.md](../../../docs/DEVELOPER-WIKI.md).
 ## Key features
 
 - Separate harvester + dispatcher systemd timers (power-cycle safe)
+- Harvest and dispatch run with low CPU weight and idle disk priority so the web server takes precedence
 - Harvest works offline: collect → process → filter → enqueue only
 - Durable queue under `00_DATA/00_UPLOAD_QUEUE/{stage}/{pending,uploading,completed,failed}/`
 - Configurable `UPLOAD_WINDOW` (`always` or `HH:MM-HH:MM`)
@@ -22,10 +23,13 @@ Canonical contracts: [docs/DEVELOPER-WIKI.md](../../../docs/DEVELOPER-WIKI.md).
 
 ## Data flow
 
-1. **Harvest** (`runner.sh harvest`): RACHEL → ModuleGaze (optional) → OC4D assessments (optional) → enqueue `pending/`
-2. **Dispatch** (`runner.sh dispatch`): if window open and online → `flush_all_queues` → S3 → `completed/`
-3. Markers: `.last_harvest_ok`, `.last_upload_ok` under the queue root
-4. Lock file (install wrappers): `/home/pi/cdn-auto/00_DATA/00_UPLOAD_QUEUE/.automation.lock`
+1. **Harvest** (`runner.sh harvest`): collect logs, process them, filter the schedule window, and enqueue CSVs. RACHEL summaries combine only CSVs generated from source logs in this processing pass. Previous filtered exports and stale intermediate CSVs are excluded, preventing repeated harvests from duplicating earlier output.
+2. **Enqueue**: compare the CSV byte-for-byte with its queue copy before removing the processed working folder. Failed or incomplete copies preserve the working folder. Pending uploads remain queued while offline.
+3. **Dispatch** (`runner.sh dispatch`): when the upload window is open and connectivity is available, upload pending files to S3 and move successful uploads to `completed/`. AWS progress output is disabled so failed multipart transfers do not flood the automation log.
+4. Markers: `.last_harvest_ok`, `.last_upload_ok` under the queue root.
+5. Lock file (installed wrappers): `/home/pi/cdn-auto/00_DATA/00_UPLOAD_QUEUE/.automation.lock`.
+
+The installer adds daily rotation for `/var/log/v5_log_processor/automation.log`, with a 25 MB size threshold and four compressed rotations. The system logrotate schedule must be enabled. V5/V6 processors report ignored and malformed line counts per file instead of printing every line. Pending uploads are never removed to enforce a disk quota; sustained upload failures still need attention.
 
 ## Config highlights
 
@@ -71,3 +75,18 @@ Local smoke: `./scripts/data/automation/validate_near_realtime.sh`
 | OC4D `[oc4d] Disabled` | `OC4D_ASSESSMENTS_ENABLED=1` via configure |
 | Assessments empty | Local DB / `oc4d_db` container; mappings; `uploaded-state.json` |
 | Wrong bucket | RACHEL uses `S3_BUCKET`; assessments use `OC4D_BUCKET` |
+
+## Reliability safeguards
+
+Failed transfers stay pending, interrupted/legacy failed items are recovered for retry, and the dispatcher checks again 60 seconds after an attempt ends. A failed file does not discard its payload or sidecars. Network calls and transfer attempts are bounded; large-file attempt deadlines scale with size. The configured upload window still applies.
+
+Collection pauses below 5 GiB free or at 90% used, and resumes with at least 8 GiB free and no more than 85% used. It preserves source records and queued uploads. The independent S3 cleanup timer runs after boot and six hours after each pass, with low CPU/disk priority. Verification happens outside the queue lock; deletion takes a brief nonblocking lock and rechecks file identity. Active uploads and mismatched/missing cloud copies are retained. Age alone never deletes queue payloads. Assessment delivery receipts preserve deduplication after verified cleanup.
+
+`install-safeguards.sh` persists a 1 MB/s background upload limit and two transfer requests for the configured AWS profile. Full-content cleanup verification reads are capped at 256 KiB/s. Use `status.sh` for the collection-paused marker and last dispatch attempt/error.
+
+Regression checks:
+
+```sh
+bash scripts/data/lib/test_resilience.sh
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/data/automation/test_verified_cleanup.py
+```

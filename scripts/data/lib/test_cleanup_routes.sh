@@ -106,6 +106,9 @@ echo data > "$PROCESSED_ROOT/site_logs_2025_06_27/site_daily_access_logs.csv"
 queue_one "$PROCESSED_ROOT/site_logs_2025_06_27/site_daily_access_logs.csv" "$QUEUE_DIR" "RACHEL" "site_logs_2025_06_27"
 assert_eq "$(read_queue_run_sidecar "$QUEUE_DIR/RACHEL/pending/site_daily_access_logs.csv")" "site_logs_2025_06_27" "queue_one sidecar"
 
+assert_dir_absent "$PROCESSED_ROOT/site_logs_2025_06_27" "processed workspace after durable enqueue"
+assert_eq "$(cat "$QUEUE_DIR/RACHEL/pending/site_daily_access_logs.csv")" "data" "queued payload survives workspace cleanup"
+
 log "=== Route 8: queue_one writes sidecar for ModuleGaze ==="
 mkdir -p "$PROCESSED_ROOT/site_modulegaze_logs_2025_06_28"
 echo data > "$PROCESSED_ROOT/site_modulegaze_logs_2025_06_28/site_daily_modulegaze_logs.csv"
@@ -128,6 +131,28 @@ fi
 log "=== Route 11: cleanup already-removed folder is a no-op ==="
 cleanup_processed_run_folder "$PROCESSED_ROOT" "site_logs_2025_06_23"
 log "PASS: repeat processed cleanup did not error"
+
+log "=== Failed queue copy preserves processed data ==="
+mkdir -p "$PROCESSED_ROOT/site_logs_2025_07_01"
+echo original > "$PROCESSED_ROOT/site_logs_2025_07_01/offline.csv"
+cp() { return 1; }
+if queue_one "$PROCESSED_ROOT/site_logs_2025_07_01/offline.csv" "$QUEUE_DIR" RACHEL site_logs_2025_07_01; then
+  echo "FAIL: failed copy reported success"; exit 1
+fi
+unset -f cp
+assert_dir_present "$PROCESSED_ROOT/site_logs_2025_07_01" "processed data after copy failure"
+assert_eq "$(cat "$PROCESSED_ROOT/site_logs_2025_07_01/offline.csv")" original "source preserved after copy failure"
+if [[ -e "$QUEUE_DIR/RACHEL/pending/offline.csv" ]]; then
+  echo "FAIL: failed copy published a queue payload"; exit 1
+fi
+
+log "=== Incomplete queue copy preserves processed data ==="
+cp() { printf truncated > "${@: -1}"; }
+if queue_one "$PROCESSED_ROOT/site_logs_2025_07_01/offline.csv" "$QUEUE_DIR" RACHEL site_logs_2025_07_01; then
+  echo "FAIL: truncated copy reported success"; exit 1
+fi
+unset -f cp
+assert_dir_present "$PROCESSED_ROOT/site_logs_2025_07_01" "processed data after incomplete copy"
 
 rm -rf "$TEST_ROOT"
 log "=== Results: $pass passed, $fail failed ==="

@@ -8,6 +8,9 @@ fi
 # Bump when completed marking schemes must be delivered again. The version is
 # stored on line 3 of the queue sidecar so old completed files are refreshed
 # once without repeatedly uploading unchanged schemes on every run.
+_oc4d_helpers_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+source "$_oc4d_helpers_dir/resilience_helpers.sh"
+
 OC4D_SCHEME_DELIVERY_VERSION="${OC4D_SCHEME_DELIVERY_VERSION:-2}"
 
 oc4d_sanitize_key_segment() {
@@ -28,7 +31,7 @@ oc4d_bucket_name() {
 oc4d_bucket_region() {
   local bucket region=""
   bucket="$(oc4d_bucket_name)"
-  region="$(aws --region us-east-1 s3api get-bucket-location --bucket "$bucket" --query 'LocationConstraint' --output text 2>/dev/null || true)"
+  region="$(timeout 20s aws --cli-connect-timeout 5 --cli-read-timeout 10 --region us-east-1 s3api get-bucket-location --bucket "$bucket" --query 'LocationConstraint' --output text 2>/dev/null || true)"
   if [[ -z "$region" || "$region" == "None" ]]; then
     region="us-east-1"
   fi
@@ -36,7 +39,7 @@ oc4d_bucket_region() {
     region="eu-west-1"
   fi
   if [[ -z "$region" ]] && command -v curl >/dev/null 2>&1; then
-    region="$(curl -sI "https://${bucket}.s3.amazonaws.com/" | tr -d '\r' | awk -F': ' 'BEGIN{IGNORECASE=1}/^x-amz-bucket-region:/{print $2; exit}')"
+    region="$(curl --connect-timeout 5 --max-time 10 -sI "https://${bucket}.s3.amazonaws.com/" | tr -d '\r' | awk -F': ' 'BEGIN{IGNORECASE=1}/^x-amz-bucket-region:/{print $2; exit}')"
   fi
   printf '%s' "$region"
 }
@@ -46,7 +49,7 @@ oc4d_aws_cp() {
   local destination="$2"
   local region
   region="$(oc4d_bucket_region)"
-  aws --region "$region" s3 cp "$file_path" "$destination"
+  background_aws_upload "$file_path" "$destination" "$region"
 }
 
 oc4d_safe_filename_base() {
@@ -218,6 +221,20 @@ queue_oc4d_one() {
 
   if [[ "$s3_key" == */MarkingSchemes/* ]]; then
     required_version="$OC4D_SCHEME_DELIVERY_VERSION"
+  fi
+
+  local receipt="$completed_dir/$base.s3receipt" receipt_hash receipt_key receipt_version receipt_bucket
+  if [[ -f "$receipt" ]]; then
+    receipt_hash="$(sed -n '1p' "$receipt")"
+    receipt_key="$(sed -n '2p' "$receipt")"
+    receipt_version="$(sed -n '3p' "$receipt")"
+    receipt_bucket="$(sed -n '4p' "$receipt")"
+    if [[ "$receipt_key" == "$s3_key" && "$receipt_bucket" == "$(oc4d_bucket_name)" ]] &&
+      { [[ -z "$required_version" ]] || [[ "$receipt_version" == "$required_version" ]]; } &&
+      [[ "$receipt_hash" == "$(sha256sum "$file_path" | awk '{print $1}')" ]]; then
+      log "[oc4d][queue] Skip $base (S3-verified receipt matches payload, key, bucket, and version)."
+      return 0
+    fi
   fi
 
   # Skip only when the completed/uploading payload, key, and delivery version

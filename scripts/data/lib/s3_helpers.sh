@@ -3,6 +3,7 @@
 _helpers_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # shellcheck disable=SC1091
 source "$_helpers_dir/cleanup_helpers.sh"
+source "$_helpers_dir/resilience_helpers.sh"
 
 QUEUE_STAGES=(RACHEL ModuleGaze OC4DAssessments)
 QUEUE_STATES=(pending uploading completed failed)
@@ -25,7 +26,7 @@ bucket_region() {
   local region=""
 
   bucket="$(bucket_name)"
-  region="$(aws --region us-east-1 s3api get-bucket-location --bucket "$bucket" --query 'LocationConstraint' --output text 2>/dev/null || true)"
+  region="$(timeout 20s aws --cli-connect-timeout 5 --cli-read-timeout 10 --region us-east-1 s3api get-bucket-location --bucket "$bucket" --query 'LocationConstraint' --output text 2>/dev/null || true)"
 
   if [[ -z "$region" || "$region" == "None" ]]; then
     region="us-east-1"
@@ -35,7 +36,7 @@ bucket_region() {
   fi
 
   if [[ -z "$region" ]] && command -v curl >/dev/null 2>&1; then
-    region="$(curl -sI "https://${bucket}.s3.amazonaws.com/" | tr -d '\r' | awk -F': ' 'BEGIN{IGNORECASE=1}/^x-amz-bucket-region:/{print $2; exit}')"
+    region="$(curl --connect-timeout 5 --max-time 10 -sI "https://${bucket}.s3.amazonaws.com/" | tr -d '\r' | awk -F': ' 'BEGIN{IGNORECASE=1}/^x-amz-bucket-region:/{print $2; exit}')"
   fi
 
   echo "$region"
@@ -47,7 +48,7 @@ aws_cp_region() {
   local region
 
   region="$(bucket_region)"
-  aws --region "$region" s3 cp "$file_path" "$destination"
+  background_aws_upload "$file_path" "$destination" "$region"
 }
 
 remote_base_path() {
@@ -69,6 +70,8 @@ upload_one() {
   remote_base="$(remote_base_path)"
   if [[ "$folder_name" == "RACHEL" && -n "${RACHEL_SUBFOLDER:-}" ]]; then
     remote_path="$(join_path "$remote_base" "$folder_name/${RACHEL_SUBFOLDER}/$(basename "$file_path")")"
+  elif [[ "$folder_name" == "ModuleGaze" && -n "${MODULEGAZE_SUBFOLDER:-}" ]]; then
+    remote_path="$(join_path "$remote_base" "$folder_name/${MODULEGAZE_SUBFOLDER}/$(basename "$file_path")")"
   else
     remote_path="$(join_path "$remote_base" "$folder_name/$(basename "$file_path")")"
   fi
@@ -179,33 +182,33 @@ _migrate_legacy_queue_files() {
 # Crash recovery: anything left in uploading/ returns to pending/.
 _recover_uploading_queue() {
   local queue_root="${1:?queue root required}"
-  local stage uploading_dir pending_dir file
-
+  local stage state source_dir pending_dir completed_dir file base
   for stage in "${QUEUE_STAGES[@]}"; do
-    uploading_dir="$(queue_state_dir "$queue_root" "$stage" "uploading")"
-    pending_dir="$(queue_state_dir "$queue_root" "$stage" "pending")"
-    mkdir -p "$uploading_dir" "$pending_dir"
-    shopt -s nullglob
-    for file in "$uploading_dir"/*.csv "$uploading_dir"/*.json; do
-      [[ -f "$file" ]] || continue
-      log "[queue] Recovering interrupted upload: $(basename "$file") → pending"
-      _queue_move_item "$file" "$pending_dir" >/dev/null || true
+    pending_dir="$(queue_state_dir "$queue_root" "$stage" pending)"
+    completed_dir="$(queue_state_dir "$queue_root" "$stage" completed)"
+    mkdir -p "$pending_dir"
+    for state in uploading failed; do
+      source_dir="$(queue_state_dir "$queue_root" "$stage" "$state")"
+      mkdir -p "$source_dir"
+      shopt -s nullglob
+      for file in "$source_dir"/*.csv "$source_dir"/*.json; do
+        base="$(basename "$file")"
+        if [[ -f "$pending_dir/$base" || -f "$completed_dir/$base" ]]; then
+          log "[queue][warn] Preserving conflicting $state item: $base; existing payload will not be overwritten."
+          continue
+        fi
+        log "[queue] Recovering $state item: $base -> pending"
+        _queue_move_item "$file" "$pending_dir" >/dev/null || return 1
+      done
+      shopt -u nullglob
     done
-    shopt -u nullglob
   done
 }
 
 purge_completed_queue() {
-  local queue_root="${1:?queue root required}"
-  local days="${2:-$QUEUE_COMPLETED_RETENTION_DAYS}"
-  local stage completed_dir
-
-  for stage in "${QUEUE_STAGES[@]}"; do
-    completed_dir="$(queue_state_dir "$queue_root" "$stage" "completed")"
-    [[ -d "$completed_dir" ]] || continue
-    find "$completed_dir" -type f \( -name '*.csv' -o -name '*.json' -o -name '*.cdnrun' -o -name '*.oc4dkey' \) \
-      -mtime "+$days" -delete 2>/dev/null || true
-  done
+  # A successful historical upload alone is insufficient proof for deleting today's local copy.
+  # The independent S3 verifier removes only current byte-identical cloud copies.
+  return 0
 }
 
 prepare_queue_dirs() {
@@ -275,10 +278,21 @@ queue_one() {
   rm -f "$(queue_state_dir "$queue_root" "$folder_name" "failed")/$base" \
     "$(queue_run_sidecar_for "$(queue_state_dir "$queue_root" "$folder_name" "failed")/$base")"
   tmp="$pending_dir/.${base}.tmp.$$"
-  cp -f "$file_path" "$tmp"
-  mv -f "$tmp" "$dest"
+  if ! cp -f "$file_path" "$tmp" || ! cmp -s "$file_path" "$tmp"; then
+    rm -f -- "$tmp"
+    log "[error] Could not copy $base into the queue; keeping processed data."
+    return 1
+  fi
+  if ! mv -f "$tmp" "$dest"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
   if [[ -n "$run_name" && ("$folder_name" == "RACHEL" || "$folder_name" == "ModuleGaze") ]]; then
-    write_queue_run_sidecar "$dest" "$run_name"
+    write_queue_run_sidecar "$dest" "$run_name" || return 1
+    # The verified queue copy survives offline periods; the processing workspace is redundant.
+    if [[ -n "${CDN_AUTO_PROCESSED_ROOT:-}" ]]; then
+      cleanup_processed_run_folder "$CDN_AUTO_PROCESSED_ROOT" "$run_name"
+    fi
   fi
   log "[queue] Queued $base for $folder_name (pending)."
 }

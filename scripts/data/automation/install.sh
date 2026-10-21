@@ -98,15 +98,16 @@ LOCK_FILE="$LOCK_FILE"
 echo "--- V5 Log Dispatcher triggered at \$(date) ---"
 mkdir -p "\$(dirname "\$LOCK_FILE")"
 exec 9>"\$LOCK_FILE"
-if ! flock -w 900 9; then
+if ! flock -n 9; then
   echo "--- V5 Dispatcher skipped at \$(date) (queue lock busy) ---"
   exit 0
 fi
 cd "$PROJECT_ROOT"
 find "$PROJECT_ROOT/scripts" -name '*.sh' -exec sed -i 's/\r\$//' {} + 2>/dev/null || true
-./scripts/data/automation/runner.sh dispatch >> "$LOG_FILE" 2>&1
-echo "--- V5 Dispatcher finished at \$(date) ---"
-echo ""
+rc=0
+./scripts/data/automation/runner.sh dispatch >> "$LOG_FILE" 2>&1 || rc=\$?
+echo "--- V5 Dispatcher finished at \$(date) (status=\$rc) ---"
+exit \$rc
 SCRIPT_EOF
 
 # Legacy alias: harvest then dispatch (manual escape hatch)
@@ -136,6 +137,19 @@ echo "📄 Setting up log file at $LOG_FILE..."
 mkdir -p "$LOG_DIR"
 touch "$LOG_FILE"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$LOG_DIR"
+mkdir -p /etc/logrotate.d
+cat > /etc/logrotate.d/oc4d-v5-automation << ROTATE_EOF
+$LOG_FILE /home/pi/cdn-auto-backups/s3-cleanup-job.log {
+    daily
+    maxsize 25M
+    rotate 4
+    compress
+    missingok
+    notifempty
+    copytruncate
+    su $SERVICE_USER $SERVICE_USER
+}
+ROTATE_EOF
 echo "✅ Log directory configured."
 echo ""
 
@@ -151,6 +165,17 @@ Type=oneshot
 User=$SERVICE_USER
 Group=$SERVICE_USER
 ExecStart=$HARVEST_WRAPPER
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=10
+IOWeight=10
+CPUQuota=50%
+MemoryHigh=512M
+MemoryMax=768M
+OOMScoreAdjust=500
+OOMPolicy=kill
+MemoryAccounting=yes
+TimeoutStartSec=infinity
 
 [Install]
 WantedBy=multi-user.target
@@ -184,6 +209,17 @@ Type=oneshot
 User=$SERVICE_USER
 Group=$SERVICE_USER
 ExecStart=$DISPATCH_WRAPPER
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=10
+IOWeight=10
+CPUQuota=50%
+MemoryHigh=192M
+MemoryMax=384M
+OOMScoreAdjust=500
+OOMPolicy=kill
+MemoryAccounting=yes
+TimeoutStartSec=infinity
 
 [Install]
 WantedBy=multi-user.target
@@ -196,8 +232,8 @@ Requires=$DISPATCHER_NAME.service
 
 [Timer]
 OnBootSec=5min
-OnCalendar=hourly
-AccuracySec=1min
+OnUnitInactiveSec=60s
+AccuracySec=5s
 Persistent=true
 
 [Install]
@@ -212,6 +248,7 @@ echo "🔄 Reloading systemd, enabling and starting timers..."
 systemctl daemon-reload
 systemctl enable "$HARVESTER_NAME.timer" "$DISPATCHER_NAME.timer"
 systemctl start "$HARVESTER_NAME.timer" "$DISPATCHER_NAME.timer"
+bash "$PROJECT_ROOT/scripts/data/automation/install-safeguards.sh" || exit $?
 sleep 2
 
 echo ""
@@ -220,7 +257,7 @@ echo "✅ Harvester + Dispatcher installed successfully!"
 echo "=============================================================="
 echo ""
 echo "🌾 Harvester: every hour while the device is on (override via Configure)."
-echo "📤 Dispatcher: hourly check; uploads only inside UPLOAD_WINDOW."
+echo "📤 Dispatcher: checks every minute after each attempt; uploads only inside UPLOAD_WINDOW."
 echo ""
 echo "💡 Useful commands:"
 echo "   systemctl status $HARVESTER_NAME.timer $DISPATCHER_NAME.timer"
