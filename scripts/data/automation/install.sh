@@ -137,6 +137,14 @@ echo "📄 Setting up log file at $LOG_FILE..."
 mkdir -p "$LOG_DIR"
 touch "$LOG_FILE"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$LOG_DIR"
+# Recover devices that already filled the disk with an unbounded automation.log.
+if [[ -f "$LOG_FILE" ]]; then
+  log_bytes="$(wc -c < "$LOG_FILE" | tr -d ' ')"
+  if [[ "$log_bytes" =~ ^[0-9]+$ ]] && (( log_bytes > 52428800 )); then
+    : > "$LOG_FILE"
+    echo "⚠️  Truncated oversized automation.log ($(numfmt --to=iec "$log_bytes" 2>/dev/null || echo "${log_bytes}B"))."
+  fi
+fi
 mkdir -p /etc/logrotate.d
 cat > /etc/logrotate.d/oc4d-v5-automation << ROTATE_EOF
 $LOG_FILE /home/pi/cdn-auto-backups/s3-cleanup-job.log {
@@ -242,6 +250,36 @@ TIMER_EOF
 
 echo "✅ Service/timer files created."
 echo ""
+
+# --- Optional repair (never automatic deletes) ---
+# Install only truncates a huge automation.log + installs logrotate.
+# Bloated queue CSVs require an explicit menu/install prompt.
+REPAIR_SCRIPT="$PROJECT_ROOT/scripts/data/automation/repair_storage_blowup.sh"
+REPAIR_MENU="$PROJECT_ROOT/scripts/data/automation/repair_storage_blowup_menu.sh"
+if [[ -f "$REPAIR_SCRIPT" ]] && [[ "${NONINTERACTIVE:-}" != "1" ]] && [[ -t 0 ]]; then
+  chmod +x "$REPAIR_SCRIPT" "$REPAIR_MENU" 2>/dev/null || true
+  echo "🔍 Checking for storage-blowup symptoms (oversized queue CSVs / orphan temps)..."
+  if bash "$REPAIR_SCRIPT" --detect; then
+    echo ""
+    echo "⚠️  This device looks affected by the old near-realtime CSV re-import bug."
+    echo "   Install will NOT delete queue files automatically."
+    echo "   You can repair now (dry-run → confirm), or later via:"
+    echo "   Troubleshoot → Storage → Repair storage blowup"
+    echo "   Data → Automation → Repair Storage Blowup"
+    echo ""
+    read -r -p "Run interactive repair now before starting timers? [y/N]: " do_repair
+    if [[ "${do_repair,,}" =~ ^y(es)?$ ]]; then
+      bash "$REPAIR_MENU" --embedded || true
+      echo ""
+    else
+      echo "Skipping repair. Start harvest only after freeing disk if usage is still critical."
+      echo ""
+    fi
+  else
+    echo "✅ No storage-blowup symptoms detected."
+    echo ""
+  fi
+fi
 
 # --- Enable and Start ---
 echo "🔄 Reloading systemd, enabling and starting timers..."

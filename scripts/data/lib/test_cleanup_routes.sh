@@ -154,6 +154,30 @@ fi
 unset -f cp
 assert_dir_present "$PROCESSED_ROOT/site_logs_2025_07_01" "processed data after incomplete copy"
 
+log "=== Oversized export is refused and processed workspace cleaned ==="
+mkdir -p "$PROCESSED_ROOT/site_logs_2025_07_02"
+# 200 bytes > 50 byte cap
+python3 - <<'PY' > "$PROCESSED_ROOT/site_logs_2025_07_02/site_huge_access_logs.csv"
+print("x" * 200)
+PY
+CDN_AUTO_MAX_QUEUE_FILE_BYTES=50 CDN_AUTO_PROCESSED_ROOT="$PROCESSED_ROOT" \
+  queue_one "$PROCESSED_ROOT/site_logs_2025_07_02/site_huge_access_logs.csv" "$QUEUE_DIR" RACHEL site_logs_2025_07_02 \
+  && { echo "FAIL: oversized queue_one should fail"; exit 1; }
+assert_dir_absent "$PROCESSED_ROOT/site_logs_2025_07_02" "processed after oversized refuse"
+if [[ -e "$QUEUE_DIR/RACHEL/pending/site_huge_access_logs.csv" ]]; then
+  echo "FAIL: oversized payload entered pending"; exit 1
+fi
+log "PASS: oversized export refused"
+
+log "=== Orphan enqueue temps are removed on prepare ==="
+mkdir -p "$QUEUE_DIR/RACHEL/pending"
+printf bloated > "$QUEUE_DIR/RACHEL/pending/.site_nr.tmp.99999"
+prepare_queue_dirs "$QUEUE_DIR"
+if [[ -e "$QUEUE_DIR/RACHEL/pending/.site_nr.tmp.99999" ]]; then
+  echo "FAIL: orphan tmp survived prepare_queue_dirs"; exit 1
+fi
+log "PASS: orphan enqueue temp removed"
+
 rm -rf "$TEST_ROOT"
 log "=== Results: $pass passed, $fail failed ==="
 if (( fail > 0 )); then

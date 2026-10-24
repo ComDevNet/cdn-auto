@@ -283,23 +283,22 @@ def save_processed_log_file(folder_path, file_path, log_data):
         writer = csv.writer(output_file)
         writer.writerow(HEADER)
         writer.writerows(log_data)
+    return processed_file_path
 
 
-def create_master_csv(folder_path):
+def create_master_csv(folder_path, csv_paths):
+    """Combine only CSVs produced in this processing pass (never prior filtered exports)."""
     master_csv_path = os.path.join(folder_path, "summary.csv")
     os.makedirs(folder_path, exist_ok=True)
 
     with open(master_csv_path, "w", encoding="utf-8", newline="") as master_csv:
         writer = csv.writer(master_csv)
         writer.writerow(HEADER)
-        for root, _, files in os.walk(folder_path):
-            for file in sorted(files):
-                if not file.endswith(".csv") or file == "summary.csv":
-                    continue
-                with open(os.path.join(root, file), "r", encoding="utf-8") as csv_file:
-                    reader = csv.reader(csv_file)
-                    next(reader, None)
-                    writer.writerows(reader)
+        for file_path in csv_paths:
+            with open(file_path, "r", encoding="utf-8") as csv_file:
+                reader = csv.reader(csv_file)
+                next(reader, None)
+                writer.writerows(reader)
 
 
 def is_processable(file_name):
@@ -339,10 +338,13 @@ if __name__ == "__main__":
     if total_files == 0:
         print(f"No ModuleGaze session log files found in {folder_path}.")
 
+    csv_paths = []
     for index, file_path in enumerate(sorted(files_to_process), start=1):
         log_data = process_log_file(file_path, module_index)
-        save_processed_log_file(processed_folder_path, file_path, log_data)
+        csv_path = save_processed_log_file(processed_folder_path, file_path, log_data)
+        if csv_path:
+            csv_paths.append(csv_path)
         print(f"Processing files: {index}/{total_files}")
 
-    create_master_csv(processed_folder_path)
+    create_master_csv(processed_folder_path, csv_paths)
     print("Processing completed. All ModuleGaze session log files have been processed.")

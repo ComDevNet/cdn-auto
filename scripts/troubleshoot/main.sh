@@ -26,7 +26,7 @@ GREEN='\033[0;32m'
 
 # Display menu options
 echo -e "1. OC4D           ${DARK_GRAY}-| Check oc4d status${NC}"
-echo -e "2. Storage        ${DARK_GRAY}-| Check storage${NC}"
+echo -e "2. Storage        ${DARK_GRAY}-| Disk usage + repair upload-queue blowup${NC}"
 echo -e "3. Wifi           ${DARK_GRAY}-| Check hostapd${NC}"
 echo -e "${GREEN}4. Go Back        ${DARK_GRAY}-| Go back to the main menu${NC}"
 echo -e "${RED}5. Exit           ${DARK_GRAY}-| Exit the program${NC}"

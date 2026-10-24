@@ -10,6 +10,7 @@ def process_log_file(file_path):
     """Process a single log file and extract data."""
     log_data = []
     skipped_count = 0
+    malformed = 0
 
     # New regex: optional second "- " before the "[" 
     log_pattern = re.compile(
@@ -32,8 +33,6 @@ def process_log_file(file_path):
                 match = log_pattern.search(message)
                 if not match:
                     skipped_count += 1
-                    if skipped_count <= 3:  # Show first 3 skipped lines
-                        print(f"Skipping line (unexpected format): {message[:100]}")
                     continue
 
                 g = match.groupdict()
@@ -91,13 +90,15 @@ def process_log_file(file_path):
                     browser,
                 ])
 
-            except Exception as e:
-                print(f"Error processing line: {line.strip()}, Error: {e}")
+            except Exception:
+                malformed += 1
 
-    if log_data:
-        print(f"  → Extracted {len(log_data)} records from {file_path}")
-    else:
-        print(f"  ⚠ No records extracted from {file_path} (total skipped: {skipped_count})")
+    if skipped_count or malformed:
+        print(
+            f"{os.path.basename(file_path)}: ignored {skipped_count} non-access lines; "
+            f"{malformed} malformed lines",
+            file=sys.stderr,
+        )
 
     return log_data
 

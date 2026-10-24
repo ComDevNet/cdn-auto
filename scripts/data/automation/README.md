@@ -72,15 +72,35 @@ Local smoke: `./scripts/data/automation/validate_near_realtime.sh`
 |---------|--------|
 | Nothing uploading | `UPLOAD_WINDOW`, connectivity, `status.sh` pending counts |
 | Overlapping skips | Lock held — wait or inspect running units |
+| Disk nearly full / multi‑GiB `*_access_logs.csv` in queue | Pre-fix NR re-import blowup — run `repair_storage_blowup.sh` (dry-run, then `--apply`), then update + `install.sh` |
 | OC4D `[oc4d] Disabled` | `OC4D_ASSESSMENTS_ENABLED=1` via configure |
 | Assessments empty | Local DB / `oc4d_db` container; mappings; `uploaded-state.json` |
 | Wrong bucket | RACHEL uses `S3_BUCKET`; assessments use `OC4D_BUCKET` |
+
+### Repair already-full devices
+
+**From the CDN Auto menu (preferred):**
+
+1. **Troubleshoot → Storage → Repair storage blowup**, or **Data → Automation → Repair Storage Blowup**
+2. Review the dry-run, then confirm apply (optional: purge all NR exports, vacuum journal)
+3. **Update** the Pi, then **Data → Automation → Install** so the fixed processors + logrotate are live
+
+**Install does not auto-delete queue files.** It only truncates a huge `automation.log`, installs logrotate, and if blowup symptoms are detected will *ask* whether to open the same interactive repair before starting timers.
+
+CLI (same script the menu runs):
+
+```sh
+./scripts/data/automation/repair_storage_blowup.sh            # dry-run
+sudo ./scripts/data/automation/repair_storage_blowup.sh --apply --purge-all-nr-exports --vacuum-journal
+```
+
+Removes orphan `.*.tmp.*` enqueue files, RACHEL/ModuleGaze queue CSVs over 100 MiB (corrupt re-import products), optional `--purge-all-nr-exports` for every near-realtime queue CSV of any size, bloated `00_PROCESSED` run folders, and truncates a huge `automation.log`. Source `/var/log/oc4d` (etc.) is kept so harvest can rebuild correct CSVs.
 
 ## Reliability safeguards
 
 Failed transfers stay pending, interrupted/legacy failed items are recovered for retry, and the dispatcher checks again 60 seconds after an attempt ends. A failed file does not discard its payload or sidecars. Network calls and transfer attempts are bounded; large-file attempt deadlines scale with size. The configured upload window still applies.
 
-Collection pauses below 5 GiB free or at 90% used, and resumes with at least 8 GiB free and no more than 85% used. It preserves source records and queued uploads. The independent S3 cleanup timer runs after boot and six hours after each pass, with low CPU/disk priority. Verification happens outside the queue lock; deletion takes a brief nonblocking lock and rechecks file identity. Active uploads and mismatched/missing cloud copies are retained. Age alone never deletes queue payloads. Assessment delivery receipts preserve deduplication after verified cleanup.
+Collection pauses below 5 GiB free or at 90% used, and resumes with at least 8 GiB free and no more than 85% used. It preserves source records and queued uploads. Queue payloads larger than `CDN_AUTO_MAX_QUEUE_FILE_BYTES` (default 100 MiB) are refused so a processor bug cannot re-fill the disk. Orphan `.*.tmp.*` enqueue copies are deleted whenever the queue is prepared. Skipping an already-completed/uploading basename still removes the processed workspace. The independent S3 cleanup timer runs after boot and six hours after each pass, with low CPU/disk priority. Verification happens outside the queue lock; deletion takes a brief nonblocking lock and rechecks file identity. Active uploads and mismatched/missing cloud copies are retained. Age alone never deletes queue payloads. Assessment delivery receipts preserve deduplication after verified cleanup.
 
 `install-safeguards.sh` persists a 1 MB/s background upload limit and two transfer requests for the configured AWS profile. Full-content cleanup verification reads are capped at 256 KiB/s. Use `status.sh` for the collection-paused marker and last dispatch attempt/error.
 

@@ -211,6 +211,19 @@ purge_completed_queue() {
   return 0
 }
 
+# Remove interrupted queue copies left by killed/OOM/ENOSPC enqueue attempts.
+_cleanup_queue_tmp_files() {
+  local queue_root="${1:?queue root required}"
+  local stage state dir
+  for stage in "${QUEUE_STAGES[@]}"; do
+    for state in "${QUEUE_STATES[@]}"; do
+      dir="$(queue_state_dir "$queue_root" "$stage" "$state")"
+      [[ -d "$dir" ]] || continue
+      find "$dir" -maxdepth 1 -type f -name '.*.tmp.*' -delete 2>/dev/null || true
+    done
+  done
+}
+
 prepare_queue_dirs() {
   local queue_root="${1:?queue root required}"
   local stage state
@@ -222,6 +235,7 @@ prepare_queue_dirs() {
     done
   done
   _migrate_legacy_queue_files "$queue_root"
+  _cleanup_queue_tmp_files "$queue_root"
   _recover_uploading_queue "$queue_root"
 }
 
@@ -253,24 +267,48 @@ count_queue_state() {
   echo "$count"
 }
 
+_queue_cleanup_processed_workspace() {
+  local folder_name="$1"
+  local run_name="$2"
+  if [[ -n "$run_name" && ("$folder_name" == "RACHEL" || "$folder_name" == "ModuleGaze") ]]; then
+    if [[ -n "${CDN_AUTO_PROCESSED_ROOT:-}" ]]; then
+      cleanup_processed_run_folder "$CDN_AUTO_PROCESSED_ROOT" "$run_name"
+    fi
+  fi
+}
+
 queue_one() {
   local file_path="$1"
   local queue_root="${2:?queue root required}"
   local folder_name="${3:-RACHEL}"
   local run_name="${4:-}"
-  local pending_dir base tmp dest
+  local pending_dir base tmp dest size max_bytes
 
   prepare_queue_dirs "$queue_root"
   pending_dir="$(queue_state_dir "$queue_root" "$folder_name" "pending")"
   base="$(basename "$file_path")"
   dest="$pending_dir/$base"
 
+  # Guard against exponential re-import blowups (and any future oversized payload).
+  # Default 100 MiB — a full day of real access rows is far smaller; multi-GiB CSVs are corrupt.
+  max_bytes="${CDN_AUTO_MAX_QUEUE_FILE_BYTES:-104857600}"
+  size="$(wc -c < "$file_path" 2>/dev/null || echo 0)"
+  size="${size// /}"
+  if [[ "$size" =~ ^[0-9]+$ ]] && (( size > max_bytes )); then
+    log "[error] Refusing to queue $base (${size} bytes > max ${max_bytes}). Dropping oversized export."
+    rm -f -- "$file_path"
+    _queue_cleanup_processed_workspace "$folder_name" "$run_name"
+    return 1
+  fi
+
   if [[ -f "$(queue_state_dir "$queue_root" "$folder_name" "completed")/$base" ]]; then
     log "[queue] Skip $base for $folder_name (already completed)."
+    _queue_cleanup_processed_workspace "$folder_name" "$run_name"
     return 0
   fi
   if [[ -f "$(queue_state_dir "$queue_root" "$folder_name" "uploading")/$base" ]]; then
     log "[queue] Skip $base for $folder_name (upload in progress)."
+    _queue_cleanup_processed_workspace "$folder_name" "$run_name"
     return 0
   fi
 
@@ -290,9 +328,7 @@ queue_one() {
   if [[ -n "$run_name" && ("$folder_name" == "RACHEL" || "$folder_name" == "ModuleGaze") ]]; then
     write_queue_run_sidecar "$dest" "$run_name" || return 1
     # The verified queue copy survives offline periods; the processing workspace is redundant.
-    if [[ -n "${CDN_AUTO_PROCESSED_ROOT:-}" ]]; then
-      cleanup_processed_run_folder "$CDN_AUTO_PROCESSED_ROOT" "$run_name"
-    fi
+    _queue_cleanup_processed_workspace "$folder_name" "$run_name"
   fi
   log "[queue] Queued $base for $folder_name (pending)."
 }

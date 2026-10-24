@@ -533,7 +533,7 @@ For schemes, if line 2 is empty but line 3 is needed, helpers write a blank line
 
 ### 8.5 Retention
 
-`purge_completed_queue` deletes files in `completed/` older than `QUEUE_COMPLETED_RETENTION_DAYS` (default 7) during flush.
+`purge_completed_queue` is a no-op during flush; local `completed/` payloads are removed only by the independent S3-verified cleanup timer after a byte-identical cloud copy is confirmed. Age alone never deletes queue payloads.
 
 ### 8.6 Markers
 

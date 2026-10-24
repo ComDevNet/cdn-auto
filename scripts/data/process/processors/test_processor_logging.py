@@ -43,6 +43,25 @@ class ProcessorLoggingTests(unittest.TestCase):
                     rows = list(csv.reader(io.StringIO((processed / 'summary.csv').read_text(encoding='utf-8'))))
                     self.assertEqual(len(rows), 1, filename)
 
+    def test_modulegaze_create_master_uses_explicit_paths_only(self):
+        """Belt-and-suspenders: even if a filtered export sits in the folder, it is ignored."""
+        spec = importlib.util.spec_from_file_location(
+            'modulegaze', Path(__file__).with_name('modulegaze.py'))
+        modulegaze = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(modulegaze)
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            real = folder / 'modulegaze-sessions.csv'
+            export = folder / 'site_nr_20261021_1230_900s_modulegaze_logs.csv'
+            header = ','.join(modulegaze.HEADER)
+            real.write_text(header + '\nGuest,12:00:00,192.168.4.2,2026-10-21,mod-1,10\n', encoding='utf-8')
+            export.write_text(
+                header + '\n' + ('Guest,12:00:00,192.168.4.2,2026-10-21,mod-1,10\n' * 50),
+                encoding='utf-8')
+            modulegaze.create_master_csv(str(folder), [str(real)])
+            rows = list(csv.reader(io.StringIO((folder / 'summary.csv').read_text(encoding='utf-8'))))
+            self.assertEqual(len(rows), 2, 'filtered export must not be merged into summary')
+
     def test_noisy_input_has_bounded_output_and_keeps_access_rows(self):
         for filename in ('log-v6.py', 'logv2.py'):
             with self.subTest(processor=filename), tempfile.TemporaryDirectory() as tmp:
