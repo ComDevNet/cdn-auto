@@ -87,6 +87,13 @@ else
   echo ""
   echo -e "${GREEN}Done.${NC} If timers were stopped, restart them from"
   echo "Data → Automation → Install (or systemctl start v5-log-harvester.timer)."
+  echo ""
+  # Near-realtime never re-exports past days; offer day backfill after cleanup.
+  read -r -p "Also backfill missing S3 days from local source logs? [Y/n]: " do_bf
+  if [[ ! "${do_bf,,}" =~ ^n(o)?$ ]]; then
+    exec "$ROOT/scripts/data/automation/backfill_s3_days_menu.sh" \
+      --return "$RETURN_TO"
+  fi
 fi
 
 echo ""

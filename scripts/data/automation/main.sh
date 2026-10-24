@@ -35,12 +35,13 @@ echo -e "2. Check Status           ${DARK_GRAY}-| Check the status of the automa
 echo -e "3. Configure              ${DARK_GRAY}-| Configure automation parameters${NC}"
 echo -e "4. Flush Upload Queue     ${DARK_GRAY}-| Upload all queued files using automation config${NC}"
 echo -e "5. Repair Storage Blowup  ${DARK_GRAY}-| Clear bloated queue CSVs / logs (dry-run first)${NC}"
-echo -e "${GREEN}6. Go Back                ${DARK_GRAY}-| Go back to the data menu${NC}"
-echo -e "${RED}7. Exit                   ${DARK_GRAY}-| Exit the program${NC}"
+echo -e "6. Backfill Missing S3 Days ${DARK_GRAY}-| Compare local logs vs S3; re-export gaps${NC}"
+echo -e "${GREEN}7. Go Back                ${DARK_GRAY}-| Go back to the data menu${NC}"
+echo -e "${RED}8. Exit                   ${DARK_GRAY}-| Exit the program${NC}"
 echo ""
 
 # Prompt the user for input
-read -r -p "Choose an option (1-7): " choice
+read -r -p "Choose an option (1-8): " choice
 
 # Execute corresponding action based on user choice
 case $choice in
@@ -69,13 +70,17 @@ case $choice in
           --return ./scripts/data/automation/main.sh
         ;;
     6)
-        exec ./scripts/data/main.sh
+        exec ./scripts/data/automation/backfill_s3_days_menu.sh \
+          --return ./scripts/data/automation/main.sh
         ;;
     7)
+        exec ./scripts/data/main.sh
+        ;;
+    8)
         ./exit.sh
         ;;
     *)
-        echo -e "${RED}Invalid choice. Please choose a number between 1 and 7.${NC}"
+        echo -e "${RED}Invalid choice. Please choose a number between 1 and 8.${NC}"
         sleep 1.5
         exec ./scripts/data/automation/main.sh
         ;;

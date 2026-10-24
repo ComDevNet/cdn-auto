@@ -45,6 +45,8 @@ sudo ./scripts/data/automation/install.sh
 sudo ./scripts/data/automation/configure.sh
 ./scripts/data/automation/status.sh
 ./scripts/data/automation/flush_queue.sh          # FORCE_UPLOAD=1
+./scripts/data/automation/backfill_s3_days.sh     # dry-run: local log days vs S3 gaps
+./scripts/data/automation/backfill_s3_days.sh --apply --flush
 sudo /usr/local/bin/run_v5_log_harvester.sh
 sudo /usr/local/bin/run_v5_log_dispatcher.sh
 ```
@@ -73,6 +75,7 @@ Local smoke: `./scripts/data/automation/validate_near_realtime.sh`
 | Nothing uploading | `UPLOAD_WINDOW`, connectivity, `status.sh` pending counts |
 | Overlapping skips | Lock held — wait or inspect running units |
 | Disk nearly full / multi‑GiB `*_access_logs.csv` in queue | Pre-fix NR re-import blowup — run `repair_storage_blowup.sh` (dry-run, then `--apply`), then update + `install.sh` |
+| Past days missing in S3 after NR / blowup repair | Near-realtime only exports today→now — run **Backfill Missing S3 Days** (menu) or `backfill_s3_days.sh --apply --flush` |
 | OC4D `[oc4d] Disabled` | `OC4D_ASSESSMENTS_ENABLED=1` via configure |
 | Assessments empty | Local DB / `oc4d_db` container; mappings; `uploaded-state.json` |
 | Wrong bucket | RACHEL uses `S3_BUCKET`; assessments use `OC4D_BUCKET` |
@@ -95,6 +98,19 @@ sudo ./scripts/data/automation/repair_storage_blowup.sh --apply --purge-all-nr-e
 ```
 
 Removes orphan `.*.tmp.*` enqueue files, RACHEL/ModuleGaze queue CSVs over 100 MiB (corrupt re-import products), optional `--purge-all-nr-exports` for every near-realtime queue CSV of any size, bloated `00_PROCESSED` run folders, and truncates a huge `automation.log`. Source `/var/log/oc4d` (etc.) is kept so harvest can rebuild correct CSVs.
+
+### Backfill missing S3 days
+
+Near-realtime harvest filters **today→now** only. After blowup repair deletes bloated queue CSVs, past days that still exist as source logs under `/var/log` are **not** re-exported automatically.
+
+**Menu:** Data → Automation → **Backfill Missing S3 Days**, or Troubleshoot → Storage → **Backfill missing S3 days**. Repair also offers this after a successful apply.
+
+```sh
+./scripts/data/automation/backfill_s3_days.sh                 # dry-run gap report
+sudo ./scripts/data/automation/backfill_s3_days.sh --apply --flush
+```
+
+Compares local dated source logs vs sane (≤50 MiB) objects under the configured RACHEL/ModuleGaze S3 prefixes, builds day-scoped CSVs for gaps, enqueues with a hard size cap (never multi‑GiB junk), then flushes. Lists S3 via a temp file (not `aws | python` + heredoc) so coverage analysis cannot silently see 0 objects.
 
 ## Reliability safeguards
 
