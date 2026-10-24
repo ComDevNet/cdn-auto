@@ -28,12 +28,13 @@ GREEN='\033[0;32m'
 
 echo -e "1. Browse disk (ncdu)     ${DARK_GRAY}-| Interactive disk usage from /${NC}"
 echo -e "2. Repair storage blowup  ${DARK_GRAY}-| Clear bloated upload-queue CSVs / logs (dry-run first)${NC}"
-echo -e "3. Backfill missing S3 days ${DARK_GRAY}-| Local source-log days vs S3; re-export gaps${NC}"
-echo -e "${GREEN}4. Go Back                ${DARK_GRAY}-| Troubleshoot menu${NC}"
-echo -e "${RED}5. Exit                   ${DARK_GRAY}-| Exit CDN Auto${NC}"
+echo -e "3. Recover services       ${DARK_GRAY}-| Start units / oc4d_db / optional DB restore${NC}"
+echo -e "4. Backfill missing S3 days ${DARK_GRAY}-| Local source-log days vs S3; re-export gaps${NC}"
+echo -e "${GREEN}5. Go Back                ${DARK_GRAY}-| Troubleshoot menu${NC}"
+echo -e "${RED}6. Exit                   ${DARK_GRAY}-| Exit CDN Auto${NC}"
 echo -e "${NC}"
 
-read -r -p "Choose an option (1-5): " choice
+read -r -p "Choose an option (1-6): " choice
 
 case "$choice" in
   1)
@@ -53,17 +54,21 @@ case "$choice" in
       --return ./scripts/troubleshoot/storage.sh
     ;;
   3)
-    exec ./scripts/data/automation/backfill_s3_days_menu.sh \
+    exec ./scripts/data/automation/recover_services_menu.sh \
       --return ./scripts/troubleshoot/storage.sh
     ;;
   4)
-    exec ./scripts/troubleshoot/main.sh
+    exec ./scripts/data/automation/backfill_s3_days_menu.sh \
+      --return ./scripts/troubleshoot/storage.sh
     ;;
   5)
+    exec ./scripts/troubleshoot/main.sh
+    ;;
+  6)
     exec ./exit.sh
     ;;
   *)
-    echo "Invalid choice. Please choose 1-5."
+    echo "Invalid choice. Please choose 1-6."
     sleep 1.5
     exec ./scripts/troubleshoot/storage.sh
     ;;

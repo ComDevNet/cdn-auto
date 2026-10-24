@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Post-repair **Recover services** flow (`recover_services_after_repair.sh` + menu): start/enable existing units, bring up `oc4d_db`, optional non-empty DB restore; wired after storage-blowup repair and under Troubleshoot → Storage / Data → Automation
 - Developer wiki (`docs/DEVELOPER-WIKI.md`) as the canonical technical reference for architecture, config, queue, S3/API contracts, OC4D assessments, and database backups
 - Harvester / dispatcher automation split (`v5-log-harvester` + `v5-log-dispatcher`) with durable per-stage queue states (`pending` / `uploading` / `completed` / `failed`)
 - Near-realtime schedules (15 / 30 / 60 min) and `migrate_near_realtime.sh`

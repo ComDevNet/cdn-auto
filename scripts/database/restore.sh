@@ -8,10 +8,11 @@ source "$SCRIPT_DIR/lib.sh"
 
 usage() {
   cat <<EOF
-Usage: sudo $0 [--file /path/to/oc4d-backup-YYYY-MM-DD_HH-MM-SS.sql.gz] [--list]
+Usage: sudo $0 [--file /path/to/oc4d-backup-YYYY-MM-DD_HH-MM-SS.sql.gz] [--list] [--yes]
 
   --list          List available backups and exit
-  --file PATH     Restore the given backup without prompting
+  --file PATH     Restore the given backup (still confirms unless --yes)
+  --yes           Skip the interactive confirmation (destructive; for recovery menus)
   -h, --help      Show this help
 EOF
 }
@@ -130,6 +131,7 @@ if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
 fi
 
 backup_file=""
+SKIP_CONFIRM=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --file)
@@ -140,6 +142,10 @@ while [[ $# -gt 0 ]]; do
       ensure_backup_dir
       list_backups
       exit 0
+      ;;
+    --yes|-y)
+      SKIP_CONFIRM=1
+      shift
       ;;
     -h|--help)
       usage
@@ -168,5 +174,7 @@ if [[ -z "$backup_file" ]]; then
   exit 1
 fi
 
-confirm_restore "$backup_file" || { echo "Restore cancelled."; exit 0; }
+if (( ! SKIP_CONFIRM )); then
+  confirm_restore "$backup_file" || { echo "Restore cancelled."; exit 0; }
+fi
 restore_from_file "$backup_file"

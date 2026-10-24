@@ -86,7 +86,8 @@ Local smoke: `./scripts/data/automation/validate_near_realtime.sh`
 
 1. **Troubleshoot → Storage → Repair storage blowup**, or **Data → Automation → Repair Storage Blowup**
 2. Review the dry-run, then confirm apply (optional: purge all NR exports, vacuum journal)
-3. **Update** the Pi, then **Data → Automation → Install** so the fixed processors + logrotate are live
+3. Confirm **Recover services** when offered (or run it standalone) so oc4d/docker/timers come back healthy
+4. **Update** the Pi if still on pre-fix code, then **Data → Automation → Install** so the fixed processors + logrotate are live
 
 **Install does not auto-delete queue files.** It only truncates a huge `automation.log`, installs logrotate, and if blowup symptoms are detected will *ask* whether to open the same interactive repair before starting timers.
 
@@ -95,9 +96,19 @@ CLI (same script the menu runs):
 ```sh
 ./scripts/data/automation/repair_storage_blowup.sh            # dry-run
 sudo ./scripts/data/automation/repair_storage_blowup.sh --apply --purge-all-nr-exports --vacuum-journal
+./scripts/data/automation/recover_services_after_repair.sh    # dry-run
+sudo ./scripts/data/automation/recover_services_after_repair.sh --apply
+# If DB volume was wiped (e.g. old service-monitor prune --volumes):
+sudo ./scripts/data/automation/recover_services_after_repair.sh --apply --restore-db --yes
 ```
 
 Removes orphan `.*.tmp.*` enqueue files, RACHEL/ModuleGaze queue CSVs over 100 MiB (corrupt re-import products), optional `--purge-all-nr-exports` for every near-realtime queue CSV of any size, bloated `00_PROCESSED` run folders, and truncates a huge `automation.log`. Source `/var/log/oc4d` (etc.) is kept so harvest can rebuild correct CSVs.
+
+### Recover services after disk pressure
+
+**Menu:** Troubleshoot → Storage → **Recover services**, or Data → Automation → **Recover Services** (also offered after blowup repair apply).
+
+Starts/enables units that exist on the device, brings up `oc4d_db` (docker start or compose), verifies OC4D HTTP, and can restore the newest non-empty Postgres dump from `/var/backups/oc4d/database/` when the DB looks empty. Harvest timers start only if the queue size safeguard is present in `s3_helpers.sh` (post blowup-fix tree).
 
 ### Backfill missing S3 days
 

@@ -85,9 +85,14 @@ else
   echo -e "${RED}Applying repair…${NC}"
   run_sudo_repair --apply "${purge_flags[@]}"
   echo ""
-  echo -e "${GREEN}Done.${NC} If timers were stopped, restart them from"
-  echo "Data → Automation → Install (or systemctl start v5-log-harvester.timer)."
+  echo -e "${GREEN}Done.${NC}"
   echo ""
+  # Bring supposed-to-be-running services back (timers, oc4d, docker/db…).
+  read -r -p "Also recover services (start units / docker / optional DB restore)? [Y/n]: " do_rec
+  if [[ ! "${do_rec,,}" =~ ^n(o)?$ ]]; then
+    bash "$ROOT/scripts/data/automation/recover_services_menu.sh" --embedded || true
+    echo ""
+  fi
   # Near-realtime never re-exports past days; offer day backfill after cleanup.
   read -r -p "Also backfill missing S3 days from local source logs? [Y/n]: " do_bf
   if [[ ! "${do_bf,,}" =~ ^n(o)?$ ]]; then
